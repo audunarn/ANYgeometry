@@ -21,7 +21,7 @@ import pytest
 
 from anygeometry import GeometryError
 from anygeometry import _planning_threads as pt
-from test_planning_threads import _clear
+from test_planning_threads import _clear, _own_registry
 
 BOUND = 240
 MODULE = pt.__file__
@@ -35,6 +35,7 @@ def _registry():
 @pytest.fixture(autouse=True)
 def _bounded(monkeypatch):
     _clear(monkeypatch)
+    _own_registry(monkeypatch)
     before, registered = threading.active_count(), _registry()
     faulthandler.dump_traceback_later(BOUND, exit=True)
     yield
@@ -208,3 +209,50 @@ def test_the_module_creates_threads_only_in_its_crew():
         if isinstance(node, ast.Call) and (getattr(node.func, 'attr', None) == 'Thread' or (
                 getattr(node.func, 'attr', None) == 'start' and node.func.value.id == 'thread')):
             assert id(node) in inside
+
+
+# ---- 0.4.7 gate class E (2026-11-25): an earlier test's kept mark whose ident a worker of this test gets ----
+
+FAKE = 1      # never an ident the OS gives a thread (glibc / macOS: an address; Windows: a multiple of 4)
+
+
+@pytest.fixture(scope='class')
+def _kept_mark():
+    """What an earlier test leaves behind (round 7, an interrupted wait): the kept entry of an interrupted crew
+    (known limit (5) of ``_planning_threads``). Class scope: it is in the registry before the autouse fixture."""
+    stale = pt._Crew(1, lambda: None, threading.Event())
+    stale.join_interrupted = True
+    with pt._WORKERS_LOCK:
+        pt._WORKERS[FAKE] = stale.keys[0]
+    yield stale
+    with pt._WORKERS_LOCK:
+        assert pt._WORKERS.pop(FAKE) is stale.keys[0]      # the test did not touch the module's registry
+
+
+def _workers_get(ident):
+    """``pt.threading`` with ``get_ident()`` answering ``ident`` in the crew threads (the OS reused that ident)."""
+    real = threading.get_ident
+
+    def get_ident():
+        return ident if threading.current_thread().name.startswith(pt._WORKER_PREFIX) else real()
+
+    class Threading:
+        def __getattr__(self, name):
+            return get_ident if name == 'get_ident' else getattr(threading, name)
+    return Threading()
+
+
+class TestAKeptMarkOfAnEarlierTest:
+    def test_a_worker_that_gets_its_ident_leaves_the_registry_of_the_test_unchanged(self, _kept_mark, monkeypatch):
+        # FAILS-ON-d17e909 (fixture teardown ``set() == {1}``, as in Tests run 45480936063 on Linux and macOS).
+        monkeypatch.setattr(pt, 'threading', _workers_get(FAKE))
+        seen = []
+
+        def task(item, check=None):
+            seen.append(pt._WORKERS.get(FAKE))
+            return item['face']
+        assert pt.ThreadStages(1).run('face', _two()[:1], task) == [0]
+        # While the worker ran, the entry named its own crew slot; after the join that crew removed it.
+        assert len(seen) == 1 and seen[0] is not _kept_mark.keys[0]
+        assert type(seen[0][0]) is pt._Crew and seen[0][1] == 0 and seen[0][0].entered == [FAKE]
+        assert FAKE not in pt._WORKERS

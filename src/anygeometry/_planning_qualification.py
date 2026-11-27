@@ -343,7 +343,7 @@ def worker_environment_reference(reference):
 # Curated Cython runtime interfaces observed in the supported external images.
 # Selection is not creator provenance: capture_environment still binds members,
 # every native provider image, and the complete loaded module key set.
-_GENERATED_VERSION_MODULES = ('_cython_3_2_4', '_cython_3_1_4', '_cython_3_3_0')
+_GENERATED_VERSION_MODULES = ('_cython_3_2_4', '_cython_3_1_4', '_cython_3_3_0', '_cython_3_3_1')
 
 
 def generated_runtime_modules(reference=None):

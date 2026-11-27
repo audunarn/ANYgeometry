@@ -20,7 +20,7 @@ from anygeometry import GeometryError
 from anygeometry import _planning_threads as pt
 from test_codex_boundaries_threads_20261112 import plain_reexport, plan_store_uses
 from test_codex_round4_threads_20261112 import clocked_record_fields, record_calls
-from test_planning_threads import _clear, comparable_records
+from test_planning_threads import _clear, _own_registry, comparable_records
 
 WAIT = 30
 FATAL = (KeyboardInterrupt, SystemExit)
@@ -31,6 +31,7 @@ def _clean_environment(monkeypatch):
     # Bounded: a hang (for example in an executor shutdown) dumps all stacks and ends the process.
     import faulthandler
     _clear(monkeypatch)
+    _own_registry(monkeypatch)
     faulthandler.dump_traceback_later(240, exit=True)
     yield
     faulthandler.cancel_dump_traceback_later()

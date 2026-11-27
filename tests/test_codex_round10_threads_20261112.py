@@ -24,7 +24,7 @@ import pytest
 
 from anygeometry import GeometryError
 from anygeometry import _planning_threads as pt
-from test_planning_threads import _clear
+from test_planning_threads import _clear, _own_registry
 
 WAIT = 30
 BOUND = 240
@@ -40,6 +40,7 @@ def _registry():
 @pytest.fixture(autouse=True)
 def _bounded(monkeypatch):
     _clear(monkeypatch)
+    _own_registry(monkeypatch)
     monkeypatch.setattr(threading, 'excepthook', lambda args: None)      # a deliberately killed thread stays quiet
     before, registered = threading.active_count(), _registry()
     faulthandler.dump_traceback_later(BOUND, exit=True)

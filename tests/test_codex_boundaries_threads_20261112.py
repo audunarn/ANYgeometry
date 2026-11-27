@@ -24,7 +24,7 @@ from anygeometry import plane_split
 from anygeometry.arrangement_geometry import LinePath
 from anygeometry.material_arrangement import ArrangementPath, ArrangementPoint, MaterialDomain
 from anygeometry.runtime_diagnostics import collect_runtime_diagnostics, collect_runtime_records
-from test_planning_threads import ENV, _clear, comparable_records, joint
+from test_planning_threads import ENV, _clear, _own_registry, comparable_records, joint
 
 POOL = 'anygeometry-plan'
 
@@ -32,6 +32,7 @@ POOL = 'anygeometry-plan'
 @pytest.fixture(autouse=True)
 def _clean_environment(monkeypatch):
     _clear(monkeypatch)
+    _own_registry(monkeypatch)
 
 
 class OddLine(LinePath):

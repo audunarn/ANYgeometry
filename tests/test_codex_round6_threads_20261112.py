@@ -20,7 +20,7 @@ import pytest
 
 from anygeometry import GeometryError
 from anygeometry import _planning_threads as pt
-from test_planning_threads import _clear
+from test_planning_threads import _clear, _own_registry
 
 WAIT = 30
 BOUND = 240
@@ -31,6 +31,7 @@ POOL = 'anygeometry-plan'
 @pytest.fixture(autouse=True)
 def _bounded(monkeypatch):
     _clear(monkeypatch)
+    _own_registry(monkeypatch)
     faulthandler.dump_traceback_later(BOUND, exit=True)
     yield
     faulthandler.cancel_dump_traceback_later()
@@ -276,3 +277,46 @@ def test_nested_stage_refusal_is_a_route_failure():
         pt.ThreadStages(2).run('face', _two(), task)
     with pytest.raises(pt._RouteFailure, match='inside a task of another stage'):
         pt.plan_with_threads(lambda: pt.ThreadStages(2).run('face', _two(), task), lambda: pytest.fail('serial repeat'))
+
+
+# ---- 0.4.7 gate class E (2026-11-25): an earlier test's kept mark under the ident of a later foreign thread ----
+
+FAKE = 1      # never an ident the OS gives a thread (glibc / macOS: an address; Windows: a multiple of 4)
+
+
+class _TestPool(ThreadPoolExecutor):
+    """A crew class of a test (like the ``Pool`` classes above): its entries are not provably stale."""
+
+
+@pytest.fixture(scope='class')
+def _kept_mark():
+    """What test_nested_stage_in_a_worker_cannot_clear_the_running_state_of_the_outer_stage leaves behind: the
+    kept entries of an interrupted crew of a test class. Class scope: in the registry before the autouse fixture."""
+    stale = _TestPool(1, lambda: None, threading.Event())
+    stale.join_interrupted = True
+    with pt._WORKERS_LOCK:
+        pt._WORKERS[FAKE] = stale.keys[0]
+    yield stale
+    with pt._WORKERS_LOCK:
+        assert pt._WORKERS.pop(FAKE) is stale.keys[0]      # the test did not touch the module's registry
+
+
+class TestAKeptMarkOfAnEarlierTest:
+    def test_a_foreign_thread_that_gets_its_ident_can_run_a_stage(self, _kept_mark, monkeypatch):
+        # FAILS-ON-d17e909 (Linux, whole file: test_stage_in_a_thread_that_inherited_the_context_keeps_its_own_record
+        # was refused the same way): the OS gave the ident of that entry to a later, foreign thread.
+        real = threading.get_ident
+
+        def get_ident():
+            return FAKE if threading.current_thread().name == 'foreign' else real()
+
+        class Threading:
+            def __getattr__(self, name):
+                return get_ident if name == 'get_ident' else getattr(threading, name)
+        monkeypatch.setattr(pt, 'threading', Threading())
+        seen = []
+        thread = threading.Thread(target=lambda: seen.append(pt.ThreadStages(2).run('face', _two(), _fine)),
+                                  name='foreign')
+        thread.start()
+        thread.join(WAIT)
+        assert not thread.is_alive() and seen == [[0, 1]]

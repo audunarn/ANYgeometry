@@ -66,6 +66,76 @@ def test_the_bound_covers_the_float_coefficient_error_on_random_pairs(scale):
             assert abs(floated-exact) <= Fraction(bound), (scale, sign)
 
 
+def _reference_bound(first, second, sign):
+    """``(B, whether c0's subtraction rounded)``: the documented running-error bound of ``_fold_coefficient_bound``,
+    re-derived here independently of it (own rounding model, own error terms), for this runtime's float coefficients.
+    Each rounded operation of the kernel's coefficient chain (cross products, the three dot products, the norm, the
+    r1 scalings, reach = |c| r2 and c0 = n0 - s reach) contributes an error term; the bound must enclose them all."""
+    unit = Fraction(1, 2**53)
+    gamma = 3*unit/(1-3*unit)
+
+    def half(value):                       # |fl(t) - t| <= half an ulp of fl(t), subnormals included
+        return Fraction(math.ulp(abs(float(value))))/2
+
+    def rounded(value, exact):             # error of one rounded operation: zero only when it was exact
+        return Fraction(0) if Fraction(float(value)) == exact else half(value)
+
+    F = lambda value: Fraction(float(value))
+    a1, a2, e1 = (np.asarray(v, dtype=float) for v in (first.axis, second.axis, first.radial_direction))
+    d = np.asarray(first.origin, dtype=float)-np.asarray(second.origin, dtype=float)
+    r1, r2 = float(first.radius), float(second.radius)
+
+    def cross_errors(u, v):
+        errors = []
+        for j, k in ((1, 2), (2, 0), (0, 1)):
+            p, q = u[j]*v[k], u[k]*v[j]
+            errors.append(rounded(p, F(u[j])*F(v[k]))+rounded(q, F(u[k])*F(v[j]))+rounded(p-q, F(p)-F(q)))
+        return errors
+
+    def dot_error(x, ex, y, ey):           # any order, FMA or not: gamma_3 sum |x||y| + propagated + underflow
+        return Fraction(5, 2**1075)+sum(gamma*abs(F(xi))*abs(F(yi))+abs(F(xi))*eyi+abs(F(yi))*exi+exi*eyi
+                                        for xi, exi, yi, eyi in zip(x, ex, y, ey))
+
+    c, e2 = np.cross(a1, a2), np.cross(a1, e1)
+    ec, ee2 = cross_errors(a1, a2), cross_errors(a1, e1)
+    ed = [rounded(dv, F(o1)-F(o2)) for dv, o1, o2 in zip(d, first.origin, second.origin)]
+    magnitude = float(np.linalg.norm(c))
+    em = gamma*(F(magnitude)+half(magnitude))+half(magnitude)+Fraction(1, 2**536)+sum(ec)
+    n0, tc, ts = float(d @ c), float(e1 @ c), float(e2 @ c)
+    en0, etc, ets = dot_error(d, ed, c, ec), dot_error(e1, [Fraction(0)]*3, c, ec), dot_error(e2, ee2, c, ec)
+    nc, ns = r1*tc, r1*ts
+    enc = abs(F(r1))*etc+rounded(nc, F(r1)*F(tc))
+    ens = abs(F(r1))*ets+rounded(ns, F(r1)*F(ts))
+    reach = magnitude*r2
+    ereach = abs(F(r2))*em+rounded(reach, F(magnitude)*F(r2))
+    c0 = n0-sign*reach
+    esub = rounded(c0, F(n0)-sign*F(reach))
+    ec0 = en0+ereach+esub
+    total = sum((2*abs(F(value))+error)*error for value, error in ((nc, enc), (ns, ens), (c0, ec0)))
+    return total, esub != 0
+
+
+def test_the_bound_is_no_smaller_than_an_independent_derivation():
+    """Codex gate-2 review M1: the enclosure test above cannot see a missing error term (the worst-case gamma_3 terms
+    dominate the actual error), and the classification tests take their expectation from the production bound. The
+    production B must be at least the independently derived one, on pairs where c0's subtraction rounds in this
+    runtime whatever the dot kernel (generic origins), so that dropping any term, e.g. the subtraction's, is caught."""
+    rng = np.random.default_rng(20261125)
+    inexact = 0
+    for scale in (2.**-40, 1., 50., 1e4):
+        for _ in range(50):
+            first, second = _pair(rng, scale)
+            for sign in (-1, 1):
+                reference, rounded = _reference_bound(first, second, sign)
+                assert Fraction(_fold_coefficient_bound(first, second, sign)) >= reference, (scale, sign)
+                inexact += rounded
+    for r1, r2 in _ORDER_PAIRS:
+        first, second = (_CylinderSupport.from_surface(c) for c in _order_pair(r1, r2))
+        for sign in (-1, 1):
+            assert Fraction(_fold_coefficient_bound(first, second, sign)) >= _reference_bound(first, second, sign)[0]
+    assert inexact >= 100
+
+
 @pytest.mark.parametrize("scale", [1., 50., 1e4])
 def test_ordinary_random_pairs_have_no_undecidable_fold(scale):
     rng = np.random.default_rng(7)
@@ -209,23 +279,52 @@ def test_the_reach_covers_the_axial_travel_of_a_steep_branch():
     assert contact.near_radius == math.inf or contact.near_radius >= 16*7.8245e-4
 
 
-def test_classification_does_not_depend_on_the_order_of_the_faces():
-    """Codex K6 R3 M4: |D| = 3.286e-15 against B = 3.220e-15 in one order, undecidable in the other. The contact is
-    classified from both orders, so both orders see the same contact points."""
+#: (r1, r2) of the order test's pair, all within a few ulp of 1. B (the forward error bound) is formed from the
+#: runtime's own float coefficients, and those depend on the BLAS dot kernel: with FMA (OpenBLAS SkylakeX) n0 and
+#: (a1 x e1).c are O(1e-17) residues, without FMA (OpenBLAS Haswell/Zen/Nehalem) they are exact zeros and c0 is
+#: exact, which lowers B by 2^-52 (0.4.7 gate class F). (1, 1 + 14 2^-53), the former single case, is undecidable
+#: in both orders with FMA and decided in both without. (1, 1 + 12 2^-53) is undecidable in both orders with every
+#: kernel (|D|/B <= 0.91). The (1 - 2j 2^-53, 1 + k 2^-52) pairs are undecidable in exactly one order (forward)
+#: with every dot model checked (FMA or not, either summation order); their margins are thin (|D|/B 0.92-0.99 and
+#: 1.008-1.044), so only "at least one of them is asymmetric here" is required.
+_ORDER_PAIRS = ((1., 1.+14*2.**-53), (1., 1.+12*2.**-53),
+                *((1.-2*j*2.**-53, 1.+k*2.**-52) for j, k in ((6, 1), (5, 2), (4, 3), (3, 4), (2, 5), (1, 6))))
+
+
+def _order_pair(r1, r2):
     axis = _unit((1., 1., 0.))
     radial = _unit((-1., 1., 0.))
-    first = Cylinder(origin=(0., 0., -2.), axis=(0., 0., 1.), radial_direction=tuple(radial), radius=1., height=4.,
+    first = Cylinder(origin=(0., 0., -2.), axis=(0., 0., 1.), radial_direction=tuple(radial), radius=r1, height=4.,
                      start_angle=-.2, sweep_angle=.4)
-    second = Cylinder(origin=tuple(-2*axis), axis=tuple(axis), radial_direction=(0., 0., 1.), radius=1.+14*2.**-53,
+    second = Cylinder(origin=tuple(-2*axis), axis=tuple(axis), radial_direction=(0., 0., 1.), radius=r2,
                       height=4., start_angle=-.2, sweep_angle=.4)
-    forward = undecidable_contact(first, second, tolerance=1e-10)
-    backward = undecidable_contact(second, first, tolerance=1e-10)
-    assert forward is not None and backward is not None
-    for point in forward.points:
-        assert min(np.linalg.norm(np.asarray(point)-np.asarray(other)) for other in backward.points) < 1e-9
-    # Codex K6 R4 M3: every point of both orders is kept (no deduplication), so both orders test the same points.
-    assert sorted(zip(forward.points, forward.reaches)) == sorted(zip(backward.points, backward.reaches))
-    assert forward.admitted == backward.admitted
+    return first, second
+
+
+def test_classification_does_not_depend_on_the_order_of_the_faces():
+    """Codex K6 R3 M4: a fold can be undecidable in one order of the supports and decided in the other. The contact
+    is classified from both orders, so both orders see the same contact points: wherever either order alone is
+    undecidable, both argument orders return the same contact; where neither is, both return None."""
+    from anygeometry.analytic_supports import _order_contacts
+    asymmetric = 0
+    for r1, r2 in _ORDER_PAIRS:
+        first, second = _order_pair(r1, r2)
+        alone = (_order_contacts(first, second, 1e-10) is not None, _order_contacts(second, first, 1e-10) is not None)
+        asymmetric += alone[0] != alone[1]
+        forward = undecidable_contact(first, second, tolerance=1e-10)
+        backward = undecidable_contact(second, first, tolerance=1e-10)
+        assert (forward is not None) == (backward is not None) == any(alone), (r1, r2, alone)
+        if (r1, r2) == _ORDER_PAIRS[1]:
+            assert forward is not None, alone       # undecidable with every dot kernel
+        if forward is None:
+            continue
+        for point in forward.points:
+            assert min(np.linalg.norm(np.asarray(point)-np.asarray(other)) for other in backward.points) < 1e-9
+        # Codex K6 R4 M3: every point of both orders is kept (no deduplication), so both orders test the same points.
+        assert sorted(zip(forward.points, forward.reaches)) == sorted(zip(backward.points, backward.reaches))
+        assert forward.admitted == backward.admitted
+    # The union matters only where the orders disagree: at least one such pair must be exercised in this runtime.
+    assert asymmetric >= 1
 
 
 def _arc_rectangle(face_id, cylinder, start, sweep, base_edge):

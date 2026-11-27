@@ -8,7 +8,12 @@ typing.NamedTuple) and ``source_tensor_chart._METHODS`` (a dict built at import)
 Owner decision (2026-11-24): change the code so these stores do not exist, rather than registering them
 as trusted stores. Behaviour is unchanged.
 """
+import json
 import math
+import os
+import pathlib
+import subprocess
+import sys
 
 import pytest
 
@@ -22,9 +27,23 @@ source_tensor_chart = importlib.import_module('anygeometry.source_tensor_chart')
 
 
 def _store_paths(module):
-    report = inventory((module,))
-    assert not report.truncated
-    return [store.path for store in report.stores]
+    # In a fresh interpreter: a long test process warms module caches whose entries reach state other tests
+    # left behind, and the raw census of one module then truncates (0.4.7 gate run 45663432941, shard 8).
+    # The stores a module defines at import are what this file is about.
+    src = pathlib.Path(module.__file__).resolve().parents[1]
+    env = {key: value for key, value in os.environ.items() if key != 'PYTHONOPTIMIZE'}
+    env['PYTHONPATH'] = str(src)
+    probe = ('import importlib, json\n'
+             'from anygeometry._planning_purity import inventory\n'
+             'report = inventory((importlib.import_module(%r),))\n'
+             'print(json.dumps({"truncated": report.truncated, "paths": [s.path for s in report.stores]}))\n'
+             % module.__name__)
+    result = subprocess.run([sys.executable, '-c', probe], capture_output=True, text=True, env=env,
+                            cwd=str(src.parent), timeout=600)
+    assert result.returncode == 0, result.stderr[-2000:]
+    report = json.loads(result.stdout.strip().splitlines()[-1])
+    assert not report['truncated']
+    return report['paths']
 
 
 def test_the_sweep_rejection_switch_is_empty_by_default_and_off_only_inside_the_policy():

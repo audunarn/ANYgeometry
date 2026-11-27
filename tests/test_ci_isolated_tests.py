@@ -122,6 +122,15 @@ def test_merge_rejects_missing_duplicate_unknown_but_retains_actual_xml(tmp_path
     assert len(ET.parse(target).getroot().findall('.//testcase'))==len(names)
 
 
+def test_union_error_names_the_real_failure_that_stopped_the_shard(tmp_path):
+    # Weekly run 45480936063: --maxfail=1 stopped shards and the union error showed only missing nodes.
+    a=xml(tmp_path/'a.xml',['test_a'],failure=True);target=tmp_path/'all.xml'
+    with pytest.raises(ValueError) as caught:
+        ci.merge_junit([a],['tests/test_a.py::test_a','tests/test_a.py::test_b'],target)
+    assert "failed=['tests/test_a.py::test_a']" in str(caught.value)
+    assert "missing=['tests/test_a.py::test_b']" in str(caught.value)
+
+
 @pytest.mark.parametrize('statement',[
     'import mpmath',
     'import importlib; importlib.import_module("mpmath")',
@@ -139,7 +148,7 @@ def test_real_selected_cases_keep_shard_assignment_and_complete_actual_union(tmp
     root=tiny_driver_checkout(tmp_path/'checkout')
     nodes=['tests/test_core.py::test_core','tests/test_oracle.py::test_oracle']
     report=tmp_path/'shard-1.json';output=tmp_path/'kernel-results.xml';evidence=tmp_path/'phases'
-    env=dict(os.environ,ANYGEOMETRY_TEST_SHARD='1/1',ANYGEOMETRY_SHARD_REPORT=str(report))
+    env=dict(os.environ,ANYGEOMETRY_TEST_SHARD='1/1',ANYGEOMETRY_SHARD_REPORT=str(report));env.pop('ANYGEOMETRY_CI_DRIVER_SECONDS',None)
     command=[sys.executable,'-B',str(ci.__file__),'--root',str(root),'--evidence-dir',str(evidence),
              '--junitxml',str(output)]
     for node in nodes:command+=['--select',node]
@@ -168,7 +177,7 @@ def test_actual_collection_cannot_silently_deselect_an_assigned_id(tmp_path):
     config.write_text(json.dumps(dict(root=str(root),mode='core',
         nodes=['tests/test_tiny.py::test_a'],inventory=['tests/test_tiny.py::test_a','tests/test_tiny.py::test_b'],
         manifest=str(manifest),args=['--rootdir='+str(root),'--collect-only','-k','definitely_not_a_selected_name'])))
-    env=dict(os.environ);env.pop('ANYGEOMETRY_TEST_SHARD',None);env.pop('ANYGEOMETRY_SHARD_REPORT',None)
+    env=dict(os.environ);env.pop('ANYGEOMETRY_TEST_SHARD',None);env.pop('ANYGEOMETRY_SHARD_REPORT',None);env.pop('ANYGEOMETRY_CI_DRIVER_SECONDS',None)
     result=subprocess.run([sys.executable,'-B',str(ci.__file__),'--child',str(config)],
                           cwd=root,env=env,capture_output=True,text=True,timeout=20)
     assert result.returncode!=0
@@ -191,7 +200,7 @@ def test_module_inventory_drift_is_rejected_before_filtering(actual):
 
 def test_bootstrap_preserves_checkout_namespace_imports_at_real_collection(tmp_path):
     root=tiny_driver_checkout(tmp_path/'checkout')
-    env=dict(os.environ,ANYGEOMETRY_TEST_SHARD='1/1',ANYGEOMETRY_SHARD_REPORT=str(tmp_path/'shard.json'))
+    env=dict(os.environ,ANYGEOMETRY_TEST_SHARD='1/1',ANYGEOMETRY_SHARD_REPORT=str(tmp_path/'shard.json'));env.pop('ANYGEOMETRY_CI_DRIVER_SECONDS',None)
     command=[sys.executable,'-B',str(ci.__file__),'--collect-only','--root',str(root),
         '--evidence-dir',str(tmp_path/'phases'),'--select','tests/test_core.py']
     result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=40)
@@ -222,7 +231,7 @@ def pytest_collection_finish(session):
     Path(report).write_text(json.dumps(dict(index=index,count=count,selected=sorted(selected),
         ran=[item.nodeid for item in session.items],slow=[])))
 ''')
-    env=dict(os.environ,ANYGEOMETRY_TEST_SHARD='1/1',ANYGEOMETRY_SHARD_REPORT=str(root/'shard.json'))
+    env=dict(os.environ,ANYGEOMETRY_TEST_SHARD='1/1',ANYGEOMETRY_SHARD_REPORT=str(root/'shard.json'));env.pop('ANYGEOMETRY_CI_DRIVER_SECONDS',None)
     result=subprocess.run([sys.executable,'-B',str(ci.__file__),'--root',str(root),
         '--evidence-dir','phases','--junitxml','results.xml',flag,'chosen'],
         cwd=root,env=env,capture_output=True,text=True,timeout=30)
@@ -302,7 +311,7 @@ def _progress_child_fixture(root,body):
     node='tests/test_observed.py::test_observed';config=root/'config.json'
     config.write_text(json.dumps(dict(root=str(root),mode='core',nodes=[node],inventory=[node],
         manifest=str(root/'collection.json'),args=['--rootdir='+str(root),'--junitxml='+str(root/'actual.xml')]),indent=2))
-    env=dict(os.environ);env.pop('ANYGEOMETRY_TEST_SHARD',None);env.pop('ANYGEOMETRY_SHARD_REPORT',None)
+    env=dict(os.environ);env.pop('ANYGEOMETRY_TEST_SHARD',None);env.pop('ANYGEOMETRY_SHARD_REPORT',None);env.pop('ANYGEOMETRY_CI_DRIVER_SECONDS',None)
     return [sys.executable,'-B',str(ci.__file__),'--child',str(config)],env
 
 

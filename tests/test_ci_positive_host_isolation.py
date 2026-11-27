@@ -104,7 +104,7 @@ def test_real_mini_driver_fresh_pids_union_and_failed_positive(tmp_path,fault):
     script=mini_root(tmp_path,fault)
     evidence=tmp_path/'evidence';report=tmp_path/'shard.json';merged=tmp_path/'all.xml'
     env=dict(os.environ,ANYGEOMETRY_REQUIRE_QUALIFIED_PLANNING_TESTS='1',
-        ANYGEOMETRY_TEST_SHARD='1/1',ANYGEOMETRY_SHARD_REPORT=str(report))
+        ANYGEOMETRY_TEST_SHARD='1/1',ANYGEOMETRY_SHARD_REPORT=str(report));env.pop('ANYGEOMETRY_CI_DRIVER_SECONDS',None)
     result=subprocess.run([sys.executable,str(script),'--root',str(tmp_path),
         '--evidence-dir',str(evidence),'--junitxml',str(merged)],
         env=env,cwd=tmp_path,capture_output=True,text=True,timeout=35)

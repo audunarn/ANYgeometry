@@ -153,10 +153,32 @@ def verify_positive_junit(path,node):
         raise ValueError('required positive phase did not execute original passed assertions')
 
 
+DRIVER_SECONDS_DEFAULT=1800
+DRIVER_SECONDS_MAX=2700
+DRIVER_SECONDS_VARIABLE='ANYGEOMETRY_CI_DRIVER_SECONDS'
+
+
+def driver_budget_seconds(env):
+    """The driver budget from the workflow: unset is 1800 s; otherwise ASCII decimal digits, value 1..2700.
+
+    Owner decision 2026-11-26: the macOS Intel pytest shards get a 45-minute job and 2640 s of
+    driver budget; every other job keeps 30 minutes and 1800 s. A malformed value is refused.
+    """
+    value=env.get(DRIVER_SECONDS_VARIABLE)
+    if value is None:return DRIVER_SECONDS_DEFAULT
+    refused=ValueError('invalid CI driver budget variable: '+repr(value)[:40])
+    if type(value) is not str or not value.isascii() or not value.isdigit():raise refused
+    digits=value.lstrip('0')            # any count of leading zeros; int() would count them against its digit limit
+    if not digits or len(digits)>len(str(DRIVER_SECONDS_MAX)):raise refused
+    seconds=int(digits)
+    if not 0<seconds<=DRIVER_SECONDS_MAX:raise refused
+    return seconds
+
+
 class PhaseBudget:
-    """Secondary DRIVER budget; earlier GitHub30min whole-job cap stays stronger."""
-    def __init__(self,seconds=1800):
-        if type(seconds) is not int or not 0<seconds<=1800:raise ValueError('invalid CI driver budget')
+    """Secondary DRIVER budget; the GitHub whole-job cap (30 min, 45 on Intel Mac) starts earlier and stays stronger."""
+    def __init__(self,seconds=DRIVER_SECONDS_DEFAULT):
+        if type(seconds) is not int or not 0<seconds<=DRIVER_SECONDS_MAX:raise ValueError('invalid CI driver budget')
         self.seconds=seconds;self.started=time.monotonic();self.deadline=self.started+seconds
     def remaining(self):
         remaining=self.deadline-time.monotonic()
@@ -170,17 +192,21 @@ class PhaseBudget:
 
 def merge_junit(paths,expected,output):
     from ci_durations import node_id
-    validate_nodes(expected);combined=ET.Element('testsuites');seen=[]
+    validate_nodes(expected);combined=ET.Element('testsuites');seen=[];failed=[]
     for path in paths:
         root=ET.parse(path).getroot()
         suites=[root] if root.tag=='testsuite' else list(root)
         for suite in suites:
             if suite.tag!='testsuite':raise ValueError('unexpected JUnit root child')
             combined.append(copy.deepcopy(suite))
-            seen.extend(node_id(c.get('classname',''),c.get('name','')) for c in suite.iter('testcase'))
+            for case in suite.iter('testcase'):
+                node=node_id(case.get('classname',''),case.get('name',''));seen.append(node)
+                if any(child.tag in ('failure','error') for child in case):failed.append(node)
     ET.ElementTree(combined).write(output,encoding='utf-8',xml_declaration=True)
     if len(seen)!=len(set(seen)) or set(seen)!=set(expected):
-        raise ValueError('JUnit union differs: missing='+str(sorted(set(expected)-set(seen))[:5])+
+        # A --maxfail stop leaves the rest of the shard unrun; name the real failures first so the
+        # union error never hides them (the run still fails).
+        raise ValueError('JUnit union differs: failed='+str(failed[:5])+' missing='+str(sorted(set(expected)-set(seen))[:5])+
                          ' unknown='+str(sorted(set(seen)-set(expected))[:5])+' duplicate='+str(len(seen)-len(set(seen))))
 
 
@@ -402,7 +428,7 @@ def main(argv=None):
     focused=args.profile is None and bool(args.select or args.k or args.m or os.environ.get('PYTEST_ADDOPTS'))
     args.profile=args.profile or 'full'
     validate_selection('unit' if focused else args.profile,args.select,args.k,args.m,os.environ)
-    budget=PhaseBudget()
+    budget=PhaseBudget(driver_budget_seconds(os.environ))
     root=args.root.resolve();folder=(root/args.evidence_dir).resolve()
     if folder.exists() and any(folder.iterdir()):raise ValueError('evidence directory must be fresh')
     folder.mkdir(parents=True,exist_ok=True)
