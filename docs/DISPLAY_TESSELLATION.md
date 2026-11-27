@@ -1510,3 +1510,21 @@ Class audit: every read of a support attribute outside `_snapshot`: `_support_pa
 (origin, u, v), `_CylinderChart` (axis, radius), the cone chart (axis, radii, height) and the apex list: each is
 reached only from `_lift_plane`/`_lift_cylinder`/`_lift_cone` with the snapshot. N1's reads (`_check_support_domain`
 gets the snapshot; edge sampling reads the model's own, identical, objects after the snapshot check).
+
+### Codex round 9 (R9): identity type checks; the preflight calls the model as N1 does
+
+`tests/test_display_tessellation_lift_n3r9.py` holds the reproductions (`n3r9-old-run.txt`).
+
+**M1 (a `Plane` subclass whose metaclass sets `__hash__ = None` raised a raw `TypeError` from the class-keyed
+dictionary lookup in `_snapshot`, on the face and on a neighbour) and M2 (the incident-face preflight called
+`model.faces_using_edge` under the lift's `np.errstate(all="ignore")`, where N1 calls it under its documented model
+error state, so a `GeometryModel` subclass that depends on that state raised a raw `RuntimeError` before N1 ran).**
+Owner decision (via the coordinator, the recommended option):
+
+- The exact-type test compares classes by identity only (`_private_fields`: `cls is Plane`, ...); no class is hashed.
+- `_check_incident_supports` calls the model through N1's own `_model_call` (the same NumPy error state as N1), and a
+  model lookup that raises there is `SUPPORT_UNSUPPORTED` with fixed text naming the face and the edge.
+- **A5 extended:** hostile or broken `GeometryModel` subclasses (overridden model methods that answer differently,
+  depend on ambient state or raise) are outside the contract, like hostile supports; the lift fails closed where it
+  calls the model itself, and N1's own calls keep N1's contract. No result changes for an ordinary model.
+

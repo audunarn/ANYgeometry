@@ -88,6 +88,11 @@ All notable user-visible changes to ANYgeometry are documented here.
   M1/M2 raw `TypeError`, L1 mislabelled `TRIM_INVALID`). The r7 normalisation and the `TypeError` catch are
   removed. Changed results vs 06db3c5: int, `Fraction`, NumPy-scalar and list fields (accepted in r7) are
   `OUT_OF_DOMAIN`; subclasses are `SUPPORT_UNSUPPORTED`; ordinarily built supports unchanged.
+- N3 Codex round 9 (owner decision, recommended option): the exact-type test of a support compares classes by
+  identity (a subclass with an unhashable metaclass is `SUPPORT_UNSUPPORTED`, not a raw `TypeError`); the
+  incident-face preflight calls the model under N1's own model error state, and a failing model lookup there is
+  `SUPPORT_UNSUPPORTED`. Hostile `GeometryModel` subclasses are outside the contract, like hostile supports.
+  No change for ordinary models and supports.
 - N3 Codex round 7 (owner standing approval, recommended option): the magnitude guard covers exactly the declared
   fields of the base support class (Plane, Cylinder, Cone), not every attribute of the instance (Codex r7 M1/L1: a
   ragged stored attribute of a subclass raised a raw `ValueError`; `2**201` or a number beside a string bypassed

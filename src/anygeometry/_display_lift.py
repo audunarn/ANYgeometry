@@ -459,7 +459,18 @@ def _guarded_fields(support):
     return [f.name for f in dataclasses.fields(type(support))]
 
 
-_PRIVATE_FIELDS = {Plane: (), Cylinder: ("_circumferential",), Cone: ("_circumferential",)}
+# (class, private derived fields): matched by identity, never hashed (Codex N3 r9 M1: a subclass's
+# metaclass may make the class unhashable)
+_PRIVATE_FIELDS = ((Plane, ()), (Cylinder, ("_circumferential",)), (Cone, ("_circumferential",)))
+
+
+def _private_fields(cls):
+    """The private derived fields of an EXACT Plane, Cylinder or Cone class, else None (identity
+    comparison only)."""
+    for base, names in _PRIVATE_FIELDS:
+        if cls is base:
+            return names
+    return None
 
 
 def _exact_float_field(value, array) -> bool:
@@ -485,7 +496,8 @@ def _snapshot(face_id, support):
     the returned object.  Hostile supports (private writes after construction, hooks on a subclass) are
     outside the contract, as in the solver contract."""
     cls = type(support)
-    if cls not in _PRIVATE_FIELDS:
+    private = _private_fields(cls)
+    if private is None:
         raise _refuse("SUPPORT_UNSUPPORTED", face_id, "its support is not exactly a plane, cylinder or cone")
     snap = object.__new__(cls)
     for field in dataclasses.fields(cls):
@@ -494,7 +506,7 @@ def _snapshot(face_id, support):
             raise dt.DisplayDomainRefused(f"face {dt._id_text(face_id)}: support field {field.name!r} is not a "
                                           f"float (or a float64 vector of three): the lift's domain")
         object.__setattr__(snap, field.name, value)
-    for name in _PRIVATE_FIELDS[cls]:
+    for name in private:
         value = _read(support, name)
         if not _exact_float_field(value, True):
             raise dt.DisplayDomainRefused(f"face {dt._id_text(face_id)}: support field {name!r} is not a "
@@ -510,13 +522,21 @@ def _read(support, name):
         return None
 
 
-def _check_incident_supports(model, loops):
+def _check_incident_supports(model, face_id, loops):
     """N1 also reads the supports of the faces beside the face's edges: the same exact-type and field
     check applies to each (a refusal names the neighbour's face id)."""
     seen = set()
     for loop in loops:
         for use in loop:
-            for other in model.faces_using_edge(use.edge):
+            # the model is called exactly as N1 calls it (its NumPy error state, Codex N3 r9 M2); a
+            # lookup that fails here is a typed refusal (a hostile or broken GeometryModel subclass
+            # is outside the contract, docs)
+            try:
+                others = dt._model_call(model.faces_using_edge, use.edge)
+            except Exception:                                                # untrusted model: fail closed
+                raise _refuse("SUPPORT_UNSUPPORTED", face_id,
+                              f"the model's face lookup for edge {dt._id_text(use.edge)} failed") from None
+            for other in others:
                 support = model.faces[other].surface
                 if other in seen or not isinstance(support, (Plane, Cylinder, Cone)):
                     continue                                                # N1 refuses any other support
@@ -2954,7 +2974,7 @@ def _lift(model, face_id, tol, *, _extra_x=None):
             raise _slab._too_complex(f"at least {dt._id_text(coedges)} ring points "
                                      f"(MAX_SLAB_RING_POINTS = {_slab.MAX_SLAB_RING_POINTS})")
         _check_loops(face_id, loops)
-        _check_incident_supports(model, loops)
+        _check_incident_supports(model, face_id, loops)
         budget = [0]
         rings = [_ring(model, face_id, loop, tol, budget) for loop in loops]
         _check_magnitudes(face_id, support, rings)
