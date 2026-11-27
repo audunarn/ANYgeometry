@@ -161,8 +161,10 @@ DRIVER_SECONDS_VARIABLE='ANYGEOMETRY_CI_DRIVER_SECONDS'
 def driver_budget_seconds(env):
     """The driver budget from the workflow: unset is 1800 s; otherwise ASCII decimal digits, value 1..2700.
 
-    Owner decision 2026-11-26: the macOS Intel pytest shards get a 45-minute job and 2640 s of
-    driver budget; every other job keeps 30 minutes and 1800 s. A malformed value is refused.
+    Owner decision 2026-11-26: the macOS Intel pytest shards get 2640 s of driver budget, and
+    (owner, 2026-11-28) a 50-minute job, 360 s of nominal headroom past that budget (the driver
+    checks it between phases, so a phase that overruns can still meet the job cap); the other
+    regular pytest shards keep 30 minutes and 1800 s. A malformed value is refused.
     """
     value=env.get(DRIVER_SECONDS_VARIABLE)
     if value is None:return DRIVER_SECONDS_DEFAULT
@@ -176,7 +178,7 @@ def driver_budget_seconds(env):
 
 
 class PhaseBudget:
-    """Secondary DRIVER budget; the GitHub whole-job cap (30 min, 45 on Intel Mac) starts earlier and stays stronger."""
+    """Secondary DRIVER budget; the GitHub whole-job cap (30 min, 50 on Intel Mac) starts earlier and stays stronger."""
     def __init__(self,seconds=DRIVER_SECONDS_DEFAULT):
         if type(seconds) is not int or not 0<seconds<=DRIVER_SECONDS_MAX:raise ValueError('invalid CI driver budget')
         self.seconds=seconds;self.started=time.monotonic();self.deadline=self.started+seconds

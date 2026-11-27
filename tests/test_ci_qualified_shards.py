@@ -66,8 +66,8 @@ def test_qualified_setup_test_and_artifact_steps_are_an_inverse_only_count_chang
     text = WORKFLOW.read_text(encoding='utf-8')
     regular, qualified = job(text, 'pytest'), job(text, 'pytest-qualified')
     assert regular.split('    steps:\n', 1)[1].strip() == qualified.split('    steps:\n', 1)[1].replace('/64', '/16').strip()
-    # Intel Mac regular shards get 45 min (owner, 2026-11-26); the qualified matrix is Windows only.
-    assert "timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 45 || 30 }}" in regular
+    # Intel Mac regular shards get 50 min (owner, 2026-11-28; was 45 from 2026-11-26); the qualified matrix is Windows only.
+    assert "timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 50 || 30 }}" in regular
     assert 'timeout-minutes: 30' in qualified
     for block in (regular, qualified):
         assert 'fail-fast: false' in block

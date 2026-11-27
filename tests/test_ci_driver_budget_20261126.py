@@ -47,9 +47,12 @@ def test_the_workflow_raises_the_driver_budget_only_for_intel_mac_pytest_shards(
     assert text.count('ANYGEOMETRY_CI_DRIVER_SECONDS') == 1 and text.count(line) == 1
     regular = re.search(r'(?ms)^  pytest:\n(.*?)(?=^  [\w-]+:\n)', text).group(1)
     assert line in regular.split('    steps:\n', 1)[0]
-    assert "timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 45 || 30 }}" in regular
-    # 2640 s leaves the 45-minute job a minute of setup after the driver's own deadline.
-    assert 2640 < 45 * 60
+    assert "timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 50 || 30 }}" in regular
+    # Owner decision 2026-11-28 (option 1): the Intel Mac job is 50 minutes, the budget stays 2640 s.
+    # Measured (runs 46021054104, 46047881135; PR #58 attempt 1): setup before the test step up to 144 s,
+    # steps after it up to 67 s; the 45-minute job left 60 s, so the job cap fired before the driver's
+    # typed deadline. 50 minutes leaves 360 s.
+    assert 50 * 60 - 2640 == 360
 
 
 def test_main_reads_the_variable(monkeypatch, tmp_path):
