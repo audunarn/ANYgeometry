@@ -269,6 +269,13 @@ def _derived_text(face_id):
 
 
 # ----------------------------------------------------------------------------- arithmetic helpers
+def _dot3(x, w):
+    """Row dots of an (n, 3) array with a 3-vector, ``x0*w0 + x1*w1 + x2*w2`` left to right: IEEE
+    products and sums, the same on every platform and memory layout (no BLAS: Accelerate's dot is
+    not repeatable across offsets, main's 0.4.7 gate)."""
+    return x[:, 0] * w[0] + x[:, 1] * w[1] + x[:, 2] * w[2]
+
+
 def _norms(v):
     """Row norms of an (n, 3) array, ``sqrt(sum v^2)`` bit for bit wherever the sum of squares is
     normal; a row whose squares may underflow is scaled by an exact power of two first and its
@@ -1103,7 +1110,7 @@ def _tight_dot(points, rows, nf, dn, sense):
     perm = _ORIENT_BOUND * (np.abs(left) + np.abs(right))
     terms = nt * nf
     value = sense * terms.sum(axis=1)
-    error = ((perm @ np.abs(nf) + (np.abs(nt) + perm) @ dn + 2.0 * _EPS * np.abs(terms).sum(axis=1))
+    error = ((_dot3(perm, np.abs(nf)) + _dot3(np.abs(nt) + perm, dn) + 2.0 * _EPS * np.abs(terms).sum(axis=1))
              * (1.0 + 4.0 * _EPS) + _UNDERFLOW * (1.0 + float(np.abs(nf).sum())))
     return value, error
 
@@ -1299,7 +1306,7 @@ def _lift_plane(model, face_id, tol, support, rings, extra):
     d1, d2 = b - a, c - a
     normal = _cross(d1, d2)
     lengths = np.sqrt(np.sum(d1 ** 2, axis=1)) * np.sqrt(np.sum(d2 ** 2, axis=1))
-    dot = normal @ (sense * plane.n)
+    dot = _dot3(normal, sense * plane.n)
     filter_bound = (16.0 * _EPS + 2.0 * plane.alpha) * lengths + _UNDERFLOW
     positive = dot > filter_bound                                 # the float filter certifies these
     # M1 / C3: every triangle the filter cannot certify is decided by a tight filter, else exactly;
@@ -1468,7 +1475,7 @@ class _CylinderChart:
             return cached[1]
         weight = np.abs(self.e1) + np.abs(self.e2)
         local = max(float(np.abs(ring.points - self.o).max()) for ring in rings)
-        stored = max(float(((np.abs(ring.points) + np.abs(self.o)) @ weight).max()) for ring in rings)
+        stored = max(float(_dot3(np.abs(ring.points) + np.abs(self.o), weight).max()) for ring in rings)
         self._reach = (rings, local + stored)
         return local + stored
 
@@ -1644,8 +1651,8 @@ def _lift_cylinder(model, face_id, tol, support, rings, extra):
     d1, d2 = b - a, c - a
     normal = _cross(d1, d2)
     filter_bound = 40.0 * _EPS * np.sqrt(np.sum(d1 ** 2, axis=1)) * np.sqrt(np.sum(d2 ** 2, axis=1)) + _UNDERFLOW
-    p = normal @ cyl.e1
-    q = normal @ cyl.e2
+    p = _dot3(normal, cyl.e1)
+    q = _dot3(normal, cyl.e2)
     lo, hi = tt.min(axis=1), tt.max(axis=1)
     at_lo = sense * (p * np.cos(lo) + q * np.sin(lo))
     at_hi = sense * (p * np.cos(hi) + q * np.sin(hi))
@@ -1919,9 +1926,9 @@ def _lift_cone(model, face_id, tol, support, rings, extra):
     normal = _cross(d1, d2)
     filter_bound = (40.0 * _EPS * (1.0 + abs(cone.k)) * np.sqrt(np.sum(d1 ** 2, axis=1))
               * np.sqrt(np.sum(d2 ** 2, axis=1))) + _UNDERFLOW
-    p = sense * (normal @ cone.e1)
-    q = sense * (normal @ cone.e2)
-    level = -sense * cone.k * (normal @ cone.a)
+    p = sense * _dot3(normal, cone.e1)
+    q = sense * _dot3(normal, cone.e2)
+    level = -sense * cone.k * _dot3(normal, cone.a)
     lo, hi = tt.min(axis=1), tt.max(axis=1)
     cos_lo, sin_lo, cos_hi, sin_hi = np.cos(lo), np.sin(lo), np.cos(hi), np.sin(hi)
     at_lo = p * cos_lo + q * sin_lo + level

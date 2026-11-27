@@ -1534,3 +1534,13 @@ error state was restored, and could raise a raw exception. Fix (owner decision):
 decision: no further review rounds on hostile-model variants; A5 holds that a hostile `GeometryModel` or support
 subclass may still raise elsewhere (N1 has the same exposure), and it is not a defect of the lift.
 
+Full suite (2026-11-27): main's quadrature gate (`test_quadrature_fixed_order_sums_20261124`) flagged the cylinder
+`reach` (`@` with a weight operand). All six `(n, 3) @ (3,)` products of the lift now use `_dot3`, the explicit
+left-to-right sum the module already used for its projections: IEEE products and sums, the same on every platform
+and memory layout. Its rounding (at most `gamma_3 sum |x_i w_i|`, `gamma_3 < 2 eps`) is within every consuming
+bound's margin (the tight orientation bound's `(1 + 4 eps)` inflation, the plane / cylinder / cone filters' 16-40 eps,
+`reach` first order in eps, so second order in the azimuth tolerance; Codex static check). Measured on Windows:
+bit-identical over the r8 fuzz seeds and the corpus. `test_display_tessellation_lift_portable` forbids BLAS
+reductions in the lift and git reads in its tests. N1/N2 (`display_tessellation.py`) still use `@` in 24 places;
+they are frozen in this slice.
+

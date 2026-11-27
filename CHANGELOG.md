@@ -93,6 +93,10 @@ All notable user-visible changes to ANYgeometry are documented here.
   incident-face preflight calls the model under N1's own model error state, and a failing model lookup there is
   `SUPPORT_UNSUPPORTED`. Hostile `GeometryModel` subclasses are outside the contract, like hostile supports.
   Round 10: a lazy lookup is materialised inside that call. No change for ordinary models and supports.
+- N3 full-suite fix (2026-11-27): every three-term dot in the lift is written out left to right (`_dot3`), so
+  none goes through BLAS (Accelerate's dot is not repeatable across memory offsets on Intel macOS: main's 0.4.7
+  quadrature gate flagged the cylinder `reach`); the round-2 L2 test reads its old module from a vendored copy
+  (`tests/data/display_lift_ee0bc2c.py.txt`), not git history. Bit-identical on this platform (fuzz and corpus).
 - N3 Codex round 7 (owner standing approval, recommended option): the magnitude guard covers exactly the declared
   fields of the base support class (Plane, Cylinder, Cone), not every attribute of the instance (Codex r7 M1/L1: a
   ragged stored attribute of a subclass raised a raw `ValueError`; `2**201` or a number beside a string bypassed

@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import math
 import pathlib
-import subprocess
 import types
 from unittest.mock import patch
 
@@ -269,8 +268,8 @@ def test_l1_the_exact_plane_decision_at_equality_on_a_skew_plane():
 def _module_at(sha, name):
     old = types.ModuleType(f"anygeometry.{name}")
     old.__package__ = "anygeometry"
-    exec(compile(subprocess.check_output(["git", "show", f"{sha}:src/anygeometry/_display_lift.py"], cwd=ROOT),
-                 f"{sha}:_display_lift.py", "exec"), old.__dict__)
+    source = (ROOT / "tests" / "data" / f"display_lift_{sha}.py.txt").read_bytes()  # vendored: no git history
+    exec(compile(source, f"{sha}:_display_lift.py", "exec"), old.__dict__)
     return old
 
 
