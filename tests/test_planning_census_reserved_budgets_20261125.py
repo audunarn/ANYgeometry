@@ -24,6 +24,8 @@ from fractions import Fraction
 import numpy as np
 import pytest
 
+from _planning_numpy_profile_contract import numpy_profile_test
+
 from anygeometry import _planning_ledger as ledger
 from anygeometry import _planning_purity
 from anygeometry._planning_qualification import QualificationDecline
@@ -210,10 +212,12 @@ def _check_one_full_cache(path):
 
 
 @pytest.mark.parametrize('path', PATHS)
+@numpy_profile_test
 def test_one_full_cache_does_not_truncate_the_planning_census(path):
     _fresh_process_check('t._check_one_full_cache(%r)' % path)
 
 
+@numpy_profile_test
 def test_all_four_full_caches_do_not_truncate_the_planning_census():
     _fresh_process_check('t._check_all_four_full_caches()')
 
@@ -540,6 +544,7 @@ print('PREPARED OK')
 '''
 
 
+@numpy_profile_test
 def test_full_caches_pass_the_package_worker_ledger_and_budgets_hold():
     # A fresh process: the package ledger refuses unrelated state a long test process accumulates.
     src = pathlib.Path(ledger.__file__).resolve().parents[1]
@@ -572,6 +577,7 @@ print('HOST OK')
 '''
 
 
+@numpy_profile_test
 def test_four_full_caches_are_admitted_by_the_host_ledger_of_their_modules():
     # A fresh process (a long test process creates unrelated copyreg __slotnames__ stores, declined rows).
     src = pathlib.Path(ledger.__file__).resolve().parents[1]
@@ -822,6 +828,7 @@ def _package_r2_lines():
     return dict(line.split(' ', 1) for line in lines[:-1])
 
 
+@numpy_profile_test
 def test_r2_package_route_probes():
     out = _package_r2_lines()
     shared = 'DECLINED worker cache alias walk bound exceeded'

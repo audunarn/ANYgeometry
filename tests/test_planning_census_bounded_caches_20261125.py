@@ -23,6 +23,8 @@ from collections import OrderedDict
 
 import pytest
 
+from _planning_numpy_profile_contract import numpy_profile_test
+
 from anygeometry import _planning_ledger as ledger
 from anygeometry import _planning_purity
 from anygeometry import exact_curves as ec
@@ -107,6 +109,7 @@ print(json.dumps(report))
 '''
 
 
+@numpy_profile_test
 def test_full_bounded_caches_do_not_truncate_the_planning_census():
     _fresh_process_check('t._check_full_bounded_caches()')
 
@@ -146,6 +149,7 @@ except QualificationDecline as exc:
 '''
 
 
+@numpy_profile_test
 def test_full_bounded_caches_pass_the_package_worker_ledger():
     # A fresh process: the package ledger refuses unrelated state a long test process accumulates.
     import os
