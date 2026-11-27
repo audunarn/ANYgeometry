@@ -1434,3 +1434,43 @@ instance's stored numeric attributes (every array component and float of `vars(s
 a test sets each stored numeric attribute of `Plane`, `Cylinder` and `Cone` to `2**201` and requires the
 guard's list to exceed the bound (a missed or new field fails it). A cylinder of stored height `2**201` is
 `OUT_OF_DOMAIN`.
+
+### Codex round 7 (R7): the guard covers the base class's declared fields; unconvertible fields are a typed refusal
+
+`tests/test_display_tessellation_lift_n3r7.py` holds the reproductions (`n3r7-old-run.txt`).
+
+**M1 (a ragged stored attribute raised a raw `ValueError`) and L1 (`2**201`, or a number beside a string,
+bypassed the guard).** Both came from the guard converting every attribute of the support INSTANCE
+(`vars(support)`) with `np.asarray`, outside the typed-refusal handler. Contract (owner standing approval,
+recommended option):
+
+- **G1.** The guard covers exactly the parameters the lift reads: the declared (dataclass) fields of the BASE
+  support class (`Plane`, `Cylinder` or `Cone`), derived by introspecting the base class
+  (`_guarded_fields`). Extra attributes of a subclass are never read by the lift and are outside the domain
+  contract: they cannot change the outcome (the Codex subclass faces are accepted exactly as the plain plane's).
+  A test fails if a base field is not guarded.
+- **G2.** Each guarded field is converted to binary64 first, before any other use (`_normalised_support`): Python
+  int, `Fraction`, NumPy integer and float scalars and sequences of them convert; an int too large for a float,
+  and anything that is not a real array of the field's shape (ragged, string, `None`, complex, object, wrong
+  length) is `OUT_OF_DOMAIN` with fixed text naming the field (never the caller's value). A support whose fields
+  are already `float64` arrays and floats is used as is (ordinary inputs bit-identical); otherwise a shallow copy
+  carries the converted fields, so every later conversion sees plain floats. The handler around the lift also
+  catches `TypeError` now (fail closed, defence in depth).
+
+Audit of every conversion of caller-supplied data in `_display_lift.py` and the `face_display_mesh` tail:
+
+| Input | Conversion | Status (r7) |
+| --- | --- | --- |
+| support base fields | `_normalised_support`, before `_check_support_domain`, the rings and the lift | typed refusal (new) |
+| support subclass extras | none | never read (G1) |
+| `model`, `tol` types, face id | `_check_input`: exact-type tests | typed `GeometryError` (documented argument errors, unchanged) |
+| `tol.angle`, `tol.sag` | validated to finite floats in `DisplayTolerance.__post_init__`; `float(tol.sag)` | proven safe |
+| `model.tolerance.surface_residual`, `.length` | `float(...)` of a validated `TolerancePolicy` value | proven safe; a stray `TypeError` is now a typed refusal |
+| model points, curves, ring samples | N1 (`_edge_display_samples_and_allowance`), N1's own typed refusals; ring points are its float arrays | N1 contract, unchanged |
+| `LineRange` ends in `_trim_sag` | `np.asarray(..., dtype=float)` after N1 accepted the same edge | proven safe |
+| `_extra_x` | private test seam | out of scope |
+
+A parametrised test feeds `face_display_mesh` each base field of each support as int, `Fraction`, `np.int64`,
+`np.float32` and `np.float64` (the mesh is bit-identical to the float input's) and as huge int, `2**201`,
+string, `None`, complex, ragged, mixed, short, NaN, infinity and object (a typed `OUT_OF_DOMAIN`, never a raw
+exception).

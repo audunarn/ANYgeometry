@@ -9,6 +9,7 @@ L1  class "the upper guard's parameter list misses a stored support field" (``Cy
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import numpy as np
@@ -155,8 +156,8 @@ def _supports():
 def _numeric_attributes(support):
     """Every stored numeric attribute of a support instance: (name, index or None)."""
     out = []
-    for name, value in vars(support).items():
-        flat = np.asarray(value)
+    for name in (f.name for f in dataclasses.fields(type(support))):      # r7 G1: the declared fields of the base class
+        flat = np.asarray(getattr(support, name))
         if flat.dtype.kind not in "fiu":
             continue
         out.extend((name, i) for i in range(flat.size)) if flat.ndim else out.append((name, None))

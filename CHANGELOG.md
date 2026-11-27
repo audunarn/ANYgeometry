@@ -81,6 +81,14 @@ All notable user-visible changes to ANYgeometry are documented here.
   bit-identity sets vs 75c52fc (planar, cylinder and cone fuzz and every corpus face at both steps; tripod skins and the
   400-face cylinder accepted). Timing vs 5c4d38c (loaded PC, totals): 400-face cylinder +5 / +6 %, polygon400 +12 / +2
   %, tripod +10 / +10 % (round 4: +13 / +16, +19 / +8, +8 / +13 %).
+- N3 Codex round 7 (owner standing approval, recommended option): the magnitude guard covers exactly the declared
+  fields of the base support class (Plane, Cylinder, Cone), not every attribute of the instance (Codex r7 M1/L1: a
+  ragged stored attribute of a subclass raised a raw `ValueError`; `2**201` or a number beside a string bypassed
+  the guard); a subclass's extra attributes are never read and cannot change the outcome. Each guarded field is
+  converted to binary64 first (int, Fraction, NumPy scalars; an int too large for a float, ragged, string, `None`,
+  complex or object fields are `OUT_OF_DOMAIN` with fixed text, never a raw exception); the lift's handler also
+  catches `TypeError`. Audit table of caller-data conversions in the docs. Changed results vs 6f2cfa7: none on
+  the bit-identity sets; Codex's subclass faces are accepted as the plain plane.
 - N3 Codex round 6 (owner standing approval, recommended option): the scalar fast path of the injectivity
   certificate gives exactly the array path's decision and values (Codex r6 M1: the stdlib `hypot` was an ulp above
   `np.hypot` at the strict near-axis cutoff, so one path accepted and the other refused the same face): hypot,
