@@ -7,3 +7,37 @@ include native/_planning_native_core.cpp
 include native/_planning_runtime_inspector.cpp
 include native/runtime_inspector_profile.json
 recursive-include native/include *.hpp
+
+# Internal working material (plans, probes, notes with workstation paths or
+# customer-project names) stays out of the sdist; the wheel never had it.
+# Guarded by tests/test_sdist_no_internal_content_20261124.py.
+exclude docs/CH3E_DELIVERY.md
+exclude docs/CYLINDER_ATLAS_CONTRACT.md
+exclude docs/OVERLAP_SAFETY_043.md
+exclude docs/SUBMODEL_VOLUME_CUT_CONTRACT.md
+exclude docs/WORKFLOW_2_PROJECT.md
+exclude docs/agent_plans/CERTIFIED_HYDROSTATICS_ACCEPTANCE.md
+exclude docs/agent_plans/CERTIFIED_HYDROSTATICS_CH3_DESIGN.md
+exclude docs/agent_plans/CERTIFIED_HYDROSTATICS_DESIGN.md
+exclude docs/agent_plans/EVALUATOR_HOSTILE_REVIEW_PLAN.md
+exclude docs/agent_plans/FINAL_PLAN_AUDIT_IMPLEMENTATION_PLAN.md
+exclude docs/agent_plans/GENERALITY_PROGRAMME_PLAN.md
+exclude docs/agent_plans/SPATIAL_COLD_BUILD_OPTIMIZATION_PLAN.md
+exclude docs/coplanar-edge-joined.md
+exclude docs/geometry_full_gate_checkpoint.md
+exclude docs/geometry_implementation_checkpoint.md
+exclude docs/nurbs-extension/NURBS-RESTART.md
+exclude docs/nurbs-extension/TASK.md
+exclude tests/test_coplanar_edge_joined.py
+exclude tools/pp5_admission_contract_red.py
+exclude tools/pp5_input_probe.py
+exclude tools/pp5b_census.py
+exclude tools/pp5c_real_admission.py
+exclude tools/pp5c_stage_census.py
+exclude tools/pp5c_stage_codec_check.py
+exclude tools/pp5c_stage_decoded_check.py
+exclude tools/pp5c_stage_rebuild_probe.py
+exclude tools/pp5c_subset_control.py
+# The content scanner and its test name the markers they look for.
+exclude tools/check_sdist_content.py
+exclude tests/test_sdist_no_internal_content_20261124.py

@@ -137,18 +137,19 @@ def test_manual_release_workflow_builds_without_production_publication() -> None
     assert "repository-url:" not in workflow
     assert "gh-action-pypi-publish" not in workflow
     assert "timeout-minutes:" not in workflow
-    assert 'version != "0.4.5"' in workflow
+    assert 'version != "0.4.7"' in workflow
     assert "python tools/check_licenses.py --check-installed" in workflow
     assert "python -m twine check --strict dist/*.whl dist/*.tar.gz" in workflow
+    assert "python tools/check_sdist_content.py dist/*.tar.gz" in workflow
     assert "ANYgeometry-${{ steps.contract.outputs.version }}-release-bundle" in workflow
 
 
 RELEASE_VERIFIER = ROOT / "tools" / "verify_release_authority.py"
 RELEASE_DISTRIBUTION = "ANYgeometry"
 RELEASE_NORMALIZED = "anygeometry"
-RELEASE_VERSION = "0.4.5"
+RELEASE_VERSION = "0.4.7"
 RELEASE_TAG = f"v{RELEASE_VERSION}"
-RELEASE_TERMINAL = "ACCEPTED_ANYGEOMETRY_0_4_5_RELEASE"
+RELEASE_TERMINAL = "ACCEPTED_ANYGEOMETRY_0_4_7_RELEASE"
 RELEASE_WHEEL = f"{RELEASE_NORMALIZED}-{RELEASE_VERSION}-py3-none-any.whl"
 RELEASE_SDIST = f"{RELEASE_NORMALIZED}-{RELEASE_VERSION}.tar.gz"
 RELEASE_LEDGER = (
