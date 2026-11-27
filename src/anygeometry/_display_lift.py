@@ -452,12 +452,16 @@ def _support_parameters(support):
 
 
 def _upper_parameters(support):
-    """Every stored number of the support (the upper guard also covers what the lift never reads:
-    the stored frame vectors, sweep and start angle, which N1 bounds already)."""
-    if isinstance(support, Plane):
-        return _support_parameters(support)
-    return [*_support_parameters(support), *support.radial_direction, *support.circumferential_direction,
-            support.sweep_angle, support.start_angle]
+    """Every stored number of the support, derived from its stored attributes (Codex N3 r6 L1: a hand
+    list missed ``Cylinder.height``): the upper guard also covers what the lift never reads (the
+    stored frame vectors, height, sweep and start angle, which N1 bounds already).  Pinned by a test
+    that sets each stored numeric attribute of each support class to ``2^201``."""
+    out = []
+    for value in vars(support).values():
+        flat = np.asarray(value)
+        if flat.dtype.kind in "fiu":
+            out.extend(flat.astype(float).ravel().tolist())
+    return out
 
 
 def _check_magnitudes(face_id, support, rings):
@@ -2271,7 +2275,8 @@ def _projection_triangles(face_id, proj, points, triangles, sense):
     lengths = np.sqrt(np.sum(d1 ** 2, axis=1)) * np.sqrt(np.sum(d2 ** 2, axis=1))
     if not proj.curved:
         # |nT_f - nT| about 3 sqrt(3) eps |d1||d2|, |N_f - N| 2 sqrt(3) eps, the dot 3 eps: 24 eps
-        value = sense * (normal @ proj.normal_f)
+        n0, n1, n2 = (float(x) for x in proj.normal_f)
+        value = sense * (normal[:, 0] * n0 + normal[:, 1] * n1 + normal[:, 2] * n2)
         undecided = np.flatnonzero(~(value > 24.0 * _EPS * lengths + _UNDERFLOW))
         if not len(undecided):
             return
@@ -2283,8 +2288,10 @@ def _projection_triangles(face_id, proj, points, triangles, sense):
     hi = np.nextafter(np.max(u + aerr, axis=1), np.inf)
     if not bool(np.all(hi - lo < math.pi)):
         raise _invalid(face_id, _PROJECTED)
-    p = sense * (normal @ proj.f1)
-    q = sense * (normal @ proj.f2)
+    f10, f11, f12 = (float(x) for x in proj.f1)
+    f20, f21, f22 = (float(x) for x in proj.f2)
+    p = sense * (normal[:, 0] * f10 + normal[:, 1] * f11 + normal[:, 2] * f12)
+    q = sense * (normal[:, 0] * f20 + normal[:, 1] * f21 + normal[:, 2] * f22)
     bound = 40.0 * _EPS * lengths + _UNDERFLOW
     positive = ((p * np.cos(lo) + q * np.sin(lo) > bound) & (p * np.cos(hi) + q * np.sin(hi) > bound))
     rows = np.flatnonzero(~positive)
@@ -2625,26 +2632,27 @@ class _SmallCurvedProjection(_CurvedProjection):
         o = [float(x) for x in chart.o]
         e1, e2, a = ([float(x) for x in v] for v in (chart.e1, chart.e2, chart.a))
         self.pl = [tuple(p) for p in points.tolist()]
-        xyz, err, rho = [], [], []
+        xyz, err = [], []
         for x, y, z in self.pl:
             d0, d1, d2 = x - o[0], y - o[1], z - o[2]
-            px = d0 * e1[0] + d1 * e1[1] + d2 * e1[2]
-            py = d0 * e2[0] + d1 * e2[1] + d2 * e2[2]
-            xyz.append((px, py, d0 * a[0] + d1 * a[1] + d2 * a[2]))
+            xyz.append((d0 * e1[0] + d1 * e1[1] + d2 * e1[2], d0 * e2[0] + d1 * e2[1] + d2 * e2[2],
+                        d0 * a[0] + d1 * a[1] + d2 * a[2]))
             err.append(4.0 * _EPS * (abs(d0) + abs(d1) + abs(d2)) * (1.0 + 8.0 * _EPS) + _UNDERFLOW)
-            rho.append(math.hypot(px, py))
-        if not all(r > 16.0 * e for r, e in zip(rho, err)):
+        # hypot, atan2, round and the azimuth bound: the array path's own NumPy primitives on one
+        # short array each (Codex N3 r6 M1: the stdlib hypot and NumPy's differ by an ulp, and the
+        # strict cutoff below decides the face); the same expressions as _CurvedProjection
+        px, py, err_a = np.array([c[0] for c in xyz]), np.array([c[1] for c in xyz]), np.array(err)
+        rho = np.hypot(px, py)
+        if not bool(np.all(rho > 16.0 * err_a)):
             raise _invalid(face_id, _NEAR_AXIS)
-        u, aerr = [], []
-        for (px, py, _), t, e, r in zip(xyz, theta.tolist(), err, rho):
-            raw = math.atan2(py, px)
-            turns = round((t - raw) / _TWO_PI)
-            value = raw + turns * _TWO_PI
-            if not abs(value - t) <= 0.25 * math.pi:
-                raise _invalid(face_id, _NEAR_AXIS)
-            u.append(value)
-            aerr.append((2.2 * e / r + 8.0 * _EPS * (1.0 + abs(value)) + abs(turns) * (2.5e-16 + 8.0 * _EPS))
-                        * (1.0 + 8.0 * _EPS))
+        raw = np.arctan2(py, px)
+        turns = np.round((theta - raw) / _TWO_PI)
+        value = raw + turns * _TWO_PI
+        if not bool(np.all(np.abs(value - theta) <= 0.25 * math.pi)):
+            raise _invalid(face_id, _NEAR_AXIS)
+        aerr = ((2.2 * err_a / rho + 8.0 * _EPS * (1.0 + np.abs(value)) + np.abs(turns) * (2.5e-16 + 8.0 * _EPS))
+                * (1.0 + 8.0 * _EPS)).tolist()
+        u = value.tolist()
         self.xyzl, self.ul, self.vl, self.errl, self.aerrl, self.eul = xyz, u, [p[2] for p in xyz], err, aerr, aerr
         self.rows = (e1, e2, a)
         self.points, self._chart = points, chart
@@ -2720,13 +2728,15 @@ def _check_projection_small(face_id, proj, points, triangles, sense, chain):
 
 
 def _projection_triangles_small(face_id, proj, points, triangles, sense):
-    """:func:`_projection_triangles` on Python floats."""
+    """:func:`_projection_triangles` on Python floats (the cross products, norms and dots are the
+    array path's expressions, term by term; ``cos`` and ``sin`` are NumPy's on one short array)."""
     if not len(triangles):
         return
-    pl, rows, lows, highs = proj.pl, [], [], []
+    pl, rows = proj.pl, []
     curved = proj.curved
     if curved:
         u, aerr, (f10, f11, f12), (f20, f21, f22) = proj.ul, proj.aerrl, proj.f1, proj.f2
+        lows, highs, ps, qs, bounds, tri = [], [], [], [], [], []
     else:
         n0, n1, n2 = proj.normal_f
     for t in triangles.tolist():
@@ -2745,13 +2755,19 @@ def _projection_triangles_small(face_id, proj, points, triangles, sense):
         hi = math.nextafter(max(u[i] + aerr[i], u[j] + aerr[j], u[l] + aerr[l]), math.inf)
         if not hi - lo < math.pi:
             raise _invalid(face_id, _PROJECTED)
-        p = sense * (nx * f10 + ny * f11 + nz * f12)
-        q = sense * (nx * f20 + ny * f21 + nz * f22)
-        bound = 40.0 * _EPS * lengths + _UNDERFLOW
-        if not (p * math.cos(lo) + q * math.sin(lo) > bound and p * math.cos(hi) + q * math.sin(hi) > bound):
-            rows.append(t)
-            lows.append(lo)
-            highs.append(hi)
+        lows.append(lo)
+        highs.append(hi)
+        ps.append(sense * (nx * f10 + ny * f11 + nz * f12))
+        qs.append(sense * (nx * f20 + ny * f21 + nz * f22))
+        bounds.append(40.0 * _EPS * lengths + _UNDERFLOW)
+        tri.append(t)
+    if curved:
+        lo_a, hi_a, p_a, q_a, bound = (np.array(x) for x in (lows, highs, ps, qs, bounds))
+        positive = ((p_a * np.cos(lo_a) + q_a * np.sin(lo_a) > bound)
+                    & (p_a * np.cos(hi_a) + q_a * np.sin(hi_a) > bound))
+        keep = np.flatnonzero(~positive).tolist()
+        rows = [tri[k] for k in keep]
+        lows, highs = [lows[k] for k in keep], [highs[k] for k in keep]
     if not rows:
         return
     rows = np.array(rows, dtype=np.int64)

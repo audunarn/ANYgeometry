@@ -81,6 +81,14 @@ All notable user-visible changes to ANYgeometry are documented here.
   bit-identity sets vs 75c52fc (planar, cylinder and cone fuzz and every corpus face at both steps; tripod skins and the
   400-face cylinder accepted). Timing vs 5c4d38c (loaded PC, totals): 400-face cylinder +5 / +6 %, polygon400 +12 / +2
   %, tripod +10 / +10 % (round 4: +13 / +16, +19 / +8, +8 / +13 %).
+- N3 Codex round 6 (owner standing approval, recommended option): the scalar fast path of the injectivity
+  certificate gives exactly the array path's decision and values (Codex r6 M1: the stdlib `hypot` was an ulp above
+  `np.hypot` at the strict near-axis cutoff, so one path accepted and the other refused the same face): hypot,
+  atan2, round, cos and sin use NumPy's primitives on one short array, the dot products are explicit in both paths;
+  a differential test and script (fast path on and off) show 0 mismatches over every fuzz and corpus face. The
+  upper magnitude guard covers every stored numeric field of Plane, Cylinder and Cone, derived from the instance
+  (Codex r6 L1: `Cylinder.height` `2**201` was accepted; now `OUT_OF_DOMAIN`). Changed results vs 17c0de7: the Codex
+  M1 face is refused (`TRIM_INVALID`) on both paths; no other face of the bit-identity sets changes.
 - N2 round 8 (docs and tests only; supersedes the N3 wording of rounds 3-7 below): N2's contract states only what N2 guarantees (certified 2D
   mesh, closure coverage, `cut_ends`/`cut_fraction` as provenance, input/trust model, refusals,
   area, budgets) plus one sentence: lifting onto a support is N3's contract and N3 must not rely on

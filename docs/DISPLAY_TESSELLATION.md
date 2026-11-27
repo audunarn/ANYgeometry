@@ -1396,3 +1396,41 @@ deg), tripod 5.8 -> 5.6 ms. What remains is the certificate's own work on the ar
 tripod skins (more than 40 points per face, where the arrays are faster than the scalar path,
 measured 14.7 ms scalar) and the polygon's 5594-edge chain (the box sweep 1.4 ms, about 80 000
 u-overlapping candidates for 6841 box pairs; a uniform grid measured slower, 5.0 ms).
+
+
+### Codex round 6 (R6): scalar and array paths decide alike; the upper guard covers every stored field
+
+`tests/test_display_tessellation_lift_n3r6.py` holds the reproductions (5 of its 9 tests fail on 17c0de7,
+`n3r6-old-run.txt`; the others are acceptance checks).
+
+**M1 (the scalar certificate accepted a face the array certificate refused).** At the strict
+`rho > 16 err` cutoff the stdlib `hypot` returned one ulp more than `np.hypot` for the same lifted vertex:
+the round-5 scalar path published the triangle, the array path refused `TRIM_INVALID`. The class: the
+scalar path duplicated array-path arithmetic with other primitives. Contract (owner standing approval,
+recommended option): the scalar path gives exactly the array path's decision AND values. Audit of every
+computation the scalar path duplicates (`_display_lift.py`, `_SmallPlaneProjection`,
+`_SmallCurvedProjection`, `_projection_triangles_small`, `_check_boundary_small`):
+
+| Computation | Array path | Scalar path (r6) |
+| --- | --- | --- |
+| `fl(X - o)`, the dots with `e1, e2, a`, `err = 4 eps \|d\|_1 ...` | NumPy elementwise (sum of 3 left to right) | the same operations on floats, same order (IEEE `+ - *`: identical) |
+| `rho = hypot(x, y)`, the `rho > 16 err` cutoff | `np.hypot` | `np.hypot` on one short array (was `math.hypot`: an ulp apart) |
+| `atan2`, `round((theta - raw) / 2 pi)`, `u`, `aerr` | `np.arctan2`, `np.round`, array expressions | the same NumPy expressions on one short array (was `math.atan2`, Python `round`: `round(nan)` raised) |
+| triangle cross products, `\|d1\|\|d2\|` (`sqrt`), `24 eps` / `40 eps` bounds | elementwise `-`, `*`, `np.sqrt` | the same terms, `math.sqrt` (correctly rounded: identical) |
+| the dots `n . normal_f`, `n . f1`, `n . f2` | `normal @ v` (BLAS: order and fused multiply-add not fixed) | explicit `nx v0 + ny v1 + nz v2` in BOTH paths (the array path changed: a filter only, no published value) |
+| `cos`, `sin` of the azimuth range in the orientation filter | `np.cos`, `np.sin` | `np.cos`, `np.sin` on one short array (was `math`) |
+| `nextafter`, `min`/`max`, boxes, chain checks, adjacent and separating-axis filters | NumPy | the same expressions (checked term by term; order of raises equal) |
+| exact predicates, `_fixed`, exact azimuth enclosures | shared classes | shared |
+
+A differential test (`tests/test_display_tessellation_lift_n3r6.py`) runs corpus faces with the fast path on and
+forced off (`_SMALL_POINTS = 0`) and demands an identical outcome (refusal code and text, or bitwise
+points, triangles, chart, source and scalars); `n3r6_diff.py` runs every planar (1200), cylinder (1600) and cone
+(1400) fuzz face and every corpus face at both steps (`n3r6-diff.txt`: 0 mismatches). Changed result: the
+Codex reproduction is now refused on BOTH paths (`TRIM_INVALID`, near the axis; was accepted on the fast path).
+No other face of the bit-identity sets changes.
+
+**L1 (the upper guard omitted `Cylinder.height`).** `_upper_parameters` is now derived from the support
+instance's stored numeric attributes (every array component and float of `vars(support)`), not a hand list;
+a test sets each stored numeric attribute of `Plane`, `Cylinder` and `Cone` to `2**201` and requires the
+guard's list to exceed the bound (a missed or new field fails it). A cylinder of stored height `2**201` is
+`OUT_OF_DOMAIN`.
