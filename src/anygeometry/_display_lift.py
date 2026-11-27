@@ -45,7 +45,8 @@ Orientation (Q7): on a plane the support normal is constant, so the sign holds o
 whole footprint iff it holds once: ``nT . (sense n) > (16 eps + 2 alpha) |d1| |d2|`` (``nT = d1 x
 d2`` computed from the stored vertices; the differences, the cross product, the dot and the
 frame's tilt each round by at most a few eps of ``|d1| |d2|``).  A triangle whose 3D width
-``|nT| / longest edge`` is at most ``A_face`` is rounding-thin: exempt and counted in
+``|nT| / longest edge`` is at most ``A_face`` and that this test cannot certify is decided exactly
+(M1, :func:`_thin_plane`); only an exactly zero normal is exempt and counted in
 ``degenerate_count``.
 
 Cylinder (N3b).  Chart ``c = (theta, h)``: ``h = (P - o).a`` (``a`` the normalised stored axis),
@@ -114,7 +115,7 @@ narrower than pi the minimum exceeds ``m`` iff both end values do (an interval w
 that arc cannot contain its complement, longer than the interval).  Checked as ``sense n .
 c(theta_end) > 40 eps |d1| |d2|`` at both ends (the cross product, the frame and the trigonometric
 values each round by a few eps of ``|d1| |d2|``); a footprint of pi or more is refused.  Rounding-
-thin triangles (3D width at most ``A_face``) are exempt and counted.
+thin triangles (3D width at most ``A_face``) the test cannot certify are decided exactly (M1).
 
 Cone (N3c).  ``S*(theta, h) = o + rho(h) c(theta) + h a*``, ``rho = r0 + k h``, ``k = (r1 - r0) /
 (height |axis|)``; ``A_face`` as the cylinder's with ``rho_max`` for ``r`` plus the rounding of
@@ -128,6 +129,17 @@ Boundary chords: ``rho dT^2 / 8 + |k| dT dH / 4`` plus offsets and ``A_face``.  
 sign of ``n . (c(theta) - k a)`` over the footprint, ends plus the sinusoid's minimum where it may
 lie inside.  A trim reaching the apex (or ``rho <= 0`` at a ring point) is ``OUT_OF_DOMAIN``.
 Azimuth join (E2): on a cone the azimuth's rounding uses the smallest ``rho`` at the ring points.
+
+Codex round 1 (owner decisions H1, M1-M4, L1).  H1: a D1 merge and the chain cancellation it
+allows must hold in 3D: the merge distance ``d`` plus the cancelled chord length ``L``
+(:func:`_identification`) is added to ``trim_sag_bound`` and must not exceed T_face.  M1: a
+rounding-thin triangle the float sign test cannot certify is decided from its exact normal
+(:func:`_thin_plane`, :func:`_thin_curved`); exempt only a zero normal or, on a curved support, a
+footprint minimum within the support normal's rounding.  M2: the cut points' rounding
+(:func:`_cut_rounding`) is in ``trim_sag_bound``.  M3: where the world-scaled bound exceeds
+T_face, an origin-relative bound (and on a plane an exact rational decision,
+:meth:`_PlaneChart.exact_bound`) decides; a face the first bound accepts is unchanged.  M4: N2's
+ring caps are enforced while the rings are sampled (:func:`_ring`).
 """
 from __future__ import annotations
 
@@ -136,6 +148,7 @@ from fractions import Fraction
 
 import numpy as np
 
+from . import _slab_triangulation as _slab
 from . import display_tessellation as dt
 from ._slab_triangulation import MAX_SLAB_INCIDENCES, _integers, triangulate_rings
 from .curves import Arc, Straight
@@ -171,6 +184,8 @@ _FOLD = "a lifted triangle folds against the face normal (lift not certified)"
 _DEVIATION = "a lifted triangle's deviation bound exceeds the face tolerance (lift not certified)"
 _ARITHMETIC = "an arithmetic error in the lift"
 _WINDS = "a loop winds around the support's axis"
+_IDENTIFY = ("merged cut points, or the boundary interval their merge cancels, lie apart in 3D by more than the "
+             "face tolerance (lift not certified)")
 
 
 def _refuse(code, face_id, text):
@@ -213,11 +228,19 @@ class _Ring:
         self.points, self.source, self.edges, self.allowance = points, source, edges, allowance
 
 
-def _ring(model, face_id, loop, tol) -> _Ring:
+def _ring(model, face_id, loop, tol, budget=None) -> _Ring:
     """The N1 samples of each coedge in loop direction, last point dropped, consecutive coedges
-    meeting bit for bit; ``source[j] = (edge, interval of the chord starting at point j)``."""
+    meeting bit for bit; ``source[j] = (edge, interval of the chord starting at point j)``.
+
+    ``budget`` (a one-element list, default a fresh one) is the running count of ring points over
+    the face's loops:
+    as soon as it exceeds N2's ``MAX_SLAB_RING_POINTS`` (read at call time) the face is refused
+    ``OUT_OF_DOMAIN`` with N2's own fixed text, before any further coedge is sampled (Codex N3 r1
+    M4: budgets before work)."""
     if not loop:
         raise _invalid(face_id, _EMPTY)
+    if budget is None:
+        budget = [0]
     pieces, sources, edges = [], [], []
     allowance = 0.0
     for use in loop:
@@ -225,6 +248,10 @@ def _ring(model, face_id, loop, tol) -> _Ring:
         allowance = max(allowance, rounding.angle)
         points = samples.points if use.forward else samples.points[::-1]
         count = len(points) - 1
+        budget[0] += count
+        cap = _slab.MAX_SLAB_RING_POINTS
+        if budget[0] > cap:
+            raise _slab._too_complex(f"{dt._id_text(budget[0])} ring points (MAX_SLAB_RING_POINTS = {cap})")
         index = np.arange(count, dtype=np.int64)
         sources.append(np.column_stack((np.full(count, samples.edge_id, dtype=np.int64),
                                         index if use.forward else count - 1 - index)))
@@ -356,12 +383,12 @@ def _equal_runs(chart):
 
 
 def _merge(face_id, k, chart):
-    """D1: the merged index of every mesh vertex and the kept vertices (``None, None``: the chart
-    is injective).  Equal chart points are allowed only among cut points; the first of them
-    stays."""
+    """D1: the merged index of every mesh vertex, the kept vertices and each vertex's kept
+    representative (N2 index) (``None, None, None``: the chart is injective).  Equal chart points
+    are allowed only among cut points; the first of them stays."""
     order, same = _equal_runs(chart)
     if not bool(np.any(same)):
-        return None, None
+        return None, None, None
     n = len(chart)
     starts = np.flatnonzero(np.concatenate(([True], ~same)))
     group = np.cumsum(np.concatenate(([True], ~same))) - 1
@@ -372,11 +399,11 @@ def _merge(face_id, k, chart):
     kept = np.flatnonzero(representative == np.arange(n))
     index = np.empty(n, dtype=np.int64)
     index[kept] = np.arange(len(kept), dtype=np.int64)
-    return index[representative], kept
+    return index[representative], kept, representative
 
 
 def _combinatorial(face_id, rings, chart, triangles, cut_ends, signs, remap=None, merged_chart=None,
-                   structure=None):
+                   structure=None, cancelled=None):
     """Q2 (i)-(iv): injective chart; every directed triangle edge used once; an edge without its
     reverse lies on one ring chord and these edges are exactly the chain of every ring (its
     vertices with the cut points of each chord in order, directed so the region is on the left);
@@ -389,7 +416,8 @@ def _combinatorial(face_id, rings, chart, triangles, cut_ends, signs, remap=None
     chain is built on N2's indices, mapped, and taken as a 1-chain (a chain edge and its reverse,
     the zero-width spike between two chords, cancel); the triangles are mapped and must stay
     proper; every other check runs on the merged mesh (the caller, :func:`_merge`, has decided
-    injectivity).  Returns the (mapped) triangles."""
+    injectivity).  The cancelled chain edges (their N2 tail and head indices) are appended to
+    ``cancelled`` when given.  Returns the (mapped) triangles."""
     n = len(chart)
     k = sum(len(r.points) for r in rings)
     ring_of, following = _ring_structure(rings) if structure is None else structure
@@ -448,7 +476,15 @@ def _combinatorial(face_id, rings, chart, triangles, cut_ends, signs, remap=None
         ordered = np.sort(expected_codes)
         if bool(np.any(ordered[1:] == ordered[:-1])):
             raise _invalid(face_id, _CHAIN)
-        expected_codes = expected_codes[~_member(heads * n + tails, ordered)]           # spikes cancel
+        cancel = _member(heads * n + tails, ordered)                                   # spikes cancel
+        # H1: a ring whose whole chain cancels leaves no boundary to cover its interval
+        sizes = np.cumsum([0] + [len(t) for t, _ in expected])
+        if any(bool(np.all(cancel[sizes[r]:sizes[r + 1]])) for r in range(len(rings))):
+            raise _invalid(face_id, _CHAIN)
+        if cancelled is not None:
+            cancelled.append((np.concatenate([t for t, _ in expected])[cancel],
+                              np.concatenate([h for _, h in expected])[cancel]))
+        expected_codes = expected_codes[~cancel]
     return _triangle_edges(face_id, chart, triangles, n, expected_codes)
 
 
@@ -510,8 +546,13 @@ def _member(values, ordered):
 
 
 class _Assembled:
-    """The mesh whose combinatorics are certified: N2's, merged cut points (D1) folded in."""
-    __slots__ = ("points", "triangles", "chart", "ends", "fraction", "source", "sense", "following")
+    """The mesh whose combinatorics are certified: N2's, merged cut points (D1) folded in.
+
+    ``cut_rounding``: a bound of the distance of every cut point (as computed, ``A + f (B - A)``)
+    from its exact 3D chord (M2); ``identify``: a bound of how far the lifted boundary moves by the
+    D1 identifications, ``d + L`` (H1, :func:`_identification`)."""
+    __slots__ = ("points", "triangles", "chart", "ends", "fraction", "source", "sense", "following",
+                 "cut_rounding", "identify")
 
 
 def _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure=None) -> _Assembled:
@@ -531,17 +572,24 @@ def _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure=N
     start, finish = ring_points[ends[:, 0]], ring_points[ends[:, 1]]
     cuts = start + fraction[:, None] * (finish - start)
     triangles = mesh.triangles.astype(np.int64)
-    remap, kept = _merge(face_id, k, chart)
+    remap, kept, representative = _merge(face_id, k, chart)
     if structure is None:
         structure = _ring_structure(rings)
+    out = _Assembled()
+    # M2: a computed cut A + f (B - A) (f in [0, 1]) is within 2 eps (|A_i| + |B_i|) of its exact
+    # chord per coordinate (the difference, the product and the sum, half an ulp of each result)
+    out.cut_rounding = _cut_rounding(start, finish) if len(cuts) else 0.0
+    out.identify = 0.0
     if remap is None:
         triangles = _combinatorial(face_id, rings, chart, triangles, ends, signs, structure=structure)
     else:
         merged_chart = chart[kept]
-        triangles = _combinatorial(face_id, rings, chart, triangles, ends, signs, remap, merged_chart, structure)
+        cancelled = []
+        triangles = _combinatorial(face_id, rings, chart, triangles, ends, signs, remap, merged_chart, structure,
+                                   cancelled)
+        out.identify = _identification(ring_points, cuts, representative, *cancelled[0])
         keep = kept[k:] - k
         chart, cuts, ends, fraction = merged_chart, cuts[keep], ends[keep], fraction[keep]
-    out = _Assembled()
     out.points = np.vstack((ring_points, cuts))
     out.triangles, out.chart, out.ends, out.fraction, out.sense = triangles, chart, ends, fraction, sense
     # a cut point's source is its chord's: the interval starting at the chord's first ring vertex
@@ -551,6 +599,34 @@ def _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure=N
     first = np.where(following[ends[:, 0]] == ends[:, 1], ends[:, 0], ends[:, 1])
     out.source = np.vstack((source, source[first]))
     return out
+
+
+def _cut_rounding(start, finish):
+    """``4 eps |(|A| + |B|)|`` over the cut points' chords, raised for its own rounding (M2)."""
+    span = np.abs(start) + np.abs(finish)
+    return float(np.sqrt(np.sum(span * span, axis=1)).max()) * 4.0 * _EPS * (1.0 + 8.0 * _EPS)
+
+
+def _identification(ring_points, cuts, representative, tails, heads):
+    """H1: how far the D1 identifications move the lifted boundary from the lifted ring chords.
+
+    A merged cut is replaced by its representative (a cut on another chord with the same chart
+    point): ``d`` = the largest 3D distance between the two, as computed.  A chain edge that
+    cancels with its reverse (the zero-width spike between two chords) leaves the piece of chord
+    it stood for off the mesh boundary: every point of such a piece is within the total 3D length
+    ``L`` of the cancelled pieces of a node that stays on the boundary (a cancelled run along a
+    ring ends at nodes of that ring's remaining chain; a ring whose whole chain cancels is refused
+    by :func:`_combinatorial`).  So every lifted chord point is within ``d + L`` of the mesh
+    boundary and every boundary point within ``d`` of a chord: ``d + L`` is added to
+    ``trim_sag_bound`` and must not exceed T_face (else ``TRIM_INVALID``).  Both measured on the
+    computed points (the cuts' own rounding is ``cut_rounding``), raised for the rounding of the
+    differences, norms and sum."""
+    points = np.vstack((ring_points, cuts))
+    moved = representative != np.arange(len(points))
+    d = (float(np.sqrt(np.sum((points[moved] - points[representative[moved]]) ** 2, axis=1)).max())
+         if bool(np.any(moved)) else 0.0)
+    length = float(np.sum(np.sqrt(np.sum((points[tails] - points[heads]) ** 2, axis=1)))) if len(tails) else 0.0
+    return (d + length) * (1.0 + 8.0 * _EPS + 4.0 * _EPS * (len(tails) + 1))
 
 
 # ----------------------------------------------------------------------------- plane
@@ -570,6 +646,9 @@ class _PlaneChart:
         self.n = cross / ncross
         self.e2 = np.cross(self.n, self.e1)
         self.alpha = 8.0 * _EPS / (sine * (1.0 - 1.0e-3)) + 16.0 * _EPS
+        self._exact = tuple([Fraction(float(x)) for x in vec] for vec in (self.o, u, v))
+        eu, ev = self._exact[1], self._exact[2]
+        self.exact_normal = (eu[1] * ev[2] - eu[2] * ev[1], eu[2] * ev[0] - eu[0] * ev[2], eu[0] * ev[1] - eu[1] * ev[0])
 
     def chart(self, points):
         d = points - self.o
@@ -589,6 +668,163 @@ class _PlaneChart:
         reach = float(np.sqrt(np.sum(chart ** 2, axis=1)).max())
         return 16.0 * _EPS * (dt._norm(self.o) + size + extent) + 2.0 * self.alpha * reach
 
+    def local_bounds(self, points, chart):
+        """Per point ``|X - S*(c)| <= delta_loc (1 + 8 eps) + A_loc`` with origin-relative
+        magnitudes only (M3): ``delta_loc = |w - c_x e1 - c_y e2|`` computed, ``w = X - o`` (the
+        same rounded difference the chart is made from, within half an ulp of the exact one per
+        coordinate), and ``A_loc = 16 eps (W + |c|max) + 2 alpha |c|max`` (``W = max |w|``): the
+        difference (``eps/2 W``), the two products and two sums per coordinate (``2 eps (W +
+        2 |c|)``), the frame (``alpha (|c_x| + |c_y|) <= 2 alpha |c|``); the norm's own rounding is
+        in ``1 + 8 eps``.  No world-scale term: a face's decision does not depend on where it is."""
+        w = points - self.o
+        mapped = chart[:, :1] * self.e1 + chart[:, 1:] * self.e2
+        delta = np.sqrt(np.sum((w - mapped) ** 2, axis=1))
+        size = float(np.sqrt(np.sum(w ** 2, axis=1)).max())
+        reach = float(np.sqrt(np.sum(chart ** 2, axis=1)).max())
+        return delta * (1.0 + 8.0 * _EPS) + (16.0 * _EPS * (size + reach) + 2.0 * self.alpha * reach)
+
+    def exact_bound(self, point, chart_point, limit):
+        """The deviation ``D = |X - S*(c)|`` of one point decided against ``limit`` exactly (M3):
+        ``D^2 = |w|^2 + |c|^2 - 2 c_x (w.u) / sqrt(u.u) - 2 c_y (w.v') / sqrt(v'.v')`` with ``w = X -
+        o`` and ``v' = v - (v.u / u.u) u`` in rationals (``e1* = u / |u|``, ``e2* = v' / |v'|``, the
+        exactly orthonormal frame), the two square roots enclosed in rational intervals of relative
+        width ``2^-bits`` (bits 128, then 512, then 2048).  Returns an upper bound of ``D`` (at most
+        ``limit``) when ``D <= limit`` is proven, ``None`` when ``D > limit`` is proven or the
+        interval cannot decide (fail closed)."""
+        o, u, v = self._exact
+        w = [Fraction(float(x)) - y for x, y in zip(point, o)]
+        cx, cy = Fraction(float(chart_point[0])), Fraction(float(chart_point[1]))
+        uu = sum(x * x for x in u)
+        vu = sum(x * y for x, y in zip(v, u))
+        vp = [x - vu / uu * y for x, y in zip(v, u)]
+        vv = sum(x * x for x in vp)
+        alpha_ = sum(x * y for x, y in zip(w, u))
+        beta = sum(x * y for x, y in zip(w, vp))
+        q = sum(x * x for x in w) + cx * cx + cy * cy
+        t2 = Fraction(limit) ** 2
+        for bits in (128, 512, 2048):
+            lo_terms, hi_terms = q, q
+            for coefficient, base in ((-2 * cx * alpha_, uu), (-2 * cy * beta, vv)):
+                enclosure = _inverse_sqrt(base, bits)           # 1 / sqrt(base) in [low, high]
+                if enclosure is None:
+                    break
+                a, b = coefficient * enclosure[0], coefficient * enclosure[1]
+                lo_terms += min(a, b)
+                hi_terms += max(a, b)
+            else:
+                enclosure = True
+            if enclosure is None:
+                continue
+            if lo_terms > t2:
+                return None
+            if hi_terms <= t2:
+                bound = math.sqrt(float(max(hi_terms, Fraction(0))))
+                bound = math.nextafter(math.nextafter(bound, math.inf), math.inf)
+                return min(float(limit), bound)
+        return None
+
+
+def _inverse_sqrt(x, bits):
+    """Rationals ``low <= 1 / sqrt(x) <= high`` (``x > 0`` rational), relative width ~``2^-bits``
+    (``None`` when ``x`` is too small for this precision)."""
+    scale = 1 << bits
+    n = x.numerator * scale * scale // x.denominator
+    root = math.isqrt(n)                                   # root <= sqrt(x) scale < root + 1 (n floored)
+    if root == 0:
+        return None
+    return Fraction(scale, root + 1), Fraction(scale, root)
+
+
+def _plane_point_bounds(face_id, plane, points, chart, face_tolerance, rounding, code, text):
+    """Certified per-point bounds of ``|X - S*(c)|`` (M3).  First N3a's bound ``delta (1 + 8 eps)
+    + A_face`` (outputs bit-identical wherever it decides); where it exceeds the face tolerance,
+    the origin-relative bound (:meth:`_PlaneChart.local_bounds`), then the exact decision
+    (:meth:`_PlaneChart.exact_bound`).  A point proven over, or not decidable: refusal ``code``."""
+    bounds = plane.offsets(points, chart) * (1.0 + 8.0 * _EPS) + rounding
+    if bool(np.all(bounds <= face_tolerance)):
+        return bounds
+    bounds = np.minimum(bounds, plane.local_bounds(points, chart))
+    for i in np.flatnonzero(~(bounds <= face_tolerance)).tolist():
+        exact = plane.exact_bound(points[i], chart[i], face_tolerance)
+        if exact is None:
+            raise _refuse(code, face_id, text(float(bounds[i])))
+        bounds[i] = exact
+    return bounds
+
+
+def _exact_cross(points, rows):
+    """The exact cross products ``(b - a) x (c - a)`` (rationals) of the stored points of the
+    triangles ``rows`` (an (m, 3) index array)."""
+    out = []
+    for i, j, l in rows.tolist():
+        a, b, c = ([Fraction(float(x)) for x in points[t]] for t in (i, j, l))
+        d1 = [y - x for x, y in zip(a, b)]
+        d2 = [y - x for x, y in zip(a, c)]
+        out.append((d1[1] * d2[2] - d1[2] * d2[1], d1[2] * d2[0] - d1[0] * d2[2], d1[0] * d2[1] - d1[1] * d2[0]))
+    return out
+
+
+def _thin_plane(points, rows, plane_normal, sense):
+    """M1 on a plane: the orientation of each thin triangle decided exactly from the stored
+    points, ``sense (nT . (u x v))`` in rationals (the support normal is exactly representable).
+    Returns ``(exempt, folded)`` masks: exempt only for an exactly zero normal."""
+    exempt = np.zeros(len(rows), dtype=bool)
+    folded = np.zeros(len(rows), dtype=bool)
+    for r, n in enumerate(_exact_cross(points, rows)):
+        if n == (0, 0, 0):
+            exempt[r] = True
+        elif not sense * sum(x * y for x, y in zip(n, plane_normal)) > 0:
+            folded[r] = True
+    return exempt, folded
+
+
+def _thin_curved(points, rows, lo, hi, e1, e2, axis, k, sense):
+    """M1 on a cylinder (``k = 0``) or cone: the orientation of each thin triangle over its
+    footprint ``[lo, hi]`` decided from the EXACT normal of its stored points (rationals, then
+    correctly rounded: a relative error of half an ulp per coordinate), not from the world-scaled
+    width test.  The support normal ``c(theta) - k a`` is not representable (a transcendental
+    frame), so ``g(theta) = n . (c(theta) - k a)`` is evaluated with the module's frame and
+    decided against the margin ``m = 32 eps (1 + |k|) |n|``: the normal's rounding (eps / 2), the
+    frame (``2 FE``, 8 eps), the cosine and sine (an ulp each), the dot products and the sum
+    (6 eps), each times ``(1 + |k|)``.  Positive over the footprint (both ends above ``m``; on a
+    cone also the sinusoid's minimum where it may lie inside): certified, not exempt.  A value
+    below ``-m`` (a fold the stored floats decide) or a footprint of pi or more: folded.  Exempt
+    (counted in ``degenerate_count``) only an exactly zero normal or a footprint minimum within
+    ``[-m, m]`` (the sign is undecidable because the support normal is not representable).
+    Returns ``(exempt, folded)`` masks."""
+    exempt = np.zeros(len(rows), dtype=bool)
+    folded = np.zeros(len(rows), dtype=bool)
+    slack = 1.0 + abs(k)
+    for r, n in enumerate(_exact_cross(points, rows)):
+        if n == (0, 0, 0):
+            exempt[r] = True
+            continue
+        nf = np.array([float(x) for x in n])
+        margin = 32.0 * _EPS * slack * float(np.sqrt(nf @ nf)) + _UNDERFLOW
+        p, q = sense * float(nf @ e1), sense * float(nf @ e2)
+        level = -sense * k * float(nf @ axis)
+        a, b = float(lo[r]), float(hi[r])
+        if not b - a < math.pi:
+            folded[r] = True
+            continue
+        at_lo = p * math.cos(a) + q * math.sin(a) + level
+        at_hi = p * math.cos(b) + q * math.sin(b) + level
+        inside = (-p * math.sin(a) + q * math.cos(a) <= margin) and (-p * math.sin(b) + q * math.cos(b) >= -margin)
+        bottom = level - math.hypot(p, q)
+        low = min(at_lo, at_hi)
+        if k == 0.0:
+            if low > margin:                       # both ends positive on a footprint < pi: positive
+                continue
+        elif low > margin and (not inside or bottom > margin):
+            continue
+        if inside:
+            low = min(low, bottom)
+        if low < -margin:
+            folded[r] = True
+        else:
+            exempt[r] = True
+    return exempt, folded
+
 
 def _lift_plane(model, face_id, tol, support, rings, extra):
     plane = _PlaneChart(face_id, support)
@@ -600,16 +836,15 @@ def _lift_plane(model, face_id, tol, support, rings, extra):
     if bool(np.any(_equal_runs(ring_chart)[1])):
         raise _invalid(face_id, _RING_COINCIDE)
     # (5) boundary chords: on a plane a chord's paired deviation is its ends' (affine map)
-    deltas = plane.offsets(ring_points, ring_chart)
-    rounding = plane.rounding(ring_points, ring_chart)
-    worst = float(deltas.max()) * (1.0 + 8.0 * _EPS) + rounding
-    if not worst <= face_tolerance:
-        raise _refuse("EDGE_UNSUPPORTED", face_id, f"a boundary chord deviates from the plane by up to {worst!r}, "
-                                                   f"above the face tolerance {face_tolerance!r}")
+    def over(worst):
+        return f"a boundary chord deviates from the plane by up to {worst!r}, above the face tolerance {face_tolerance!r}"
+    _plane_point_bounds(face_id, plane, ring_points, ring_chart, face_tolerance,
+                        plane.rounding(ring_points, ring_chart), "EDGE_UNSUPPORTED", over)
     # (6) no slab step on a plane: (7) N2, refusals typed
     mesh = triangulate_rings(charts, extra)
     # (8) lift by index: ring vertices are N1's points, cut points on the 3D N1 chord
     built = _assemble(face_id, rings, ring_points, charts, ring_chart, mesh)
+    _check_identification(face_id, built, face_tolerance)
     points, chart, triangles, sense = built.points, built.chart, built.triangles, built.sense
     # (9) certificates
     if sense < 0:
@@ -625,18 +860,42 @@ def _lift_plane(model, face_id, tol, support, rings, extra):
     lengths = np.sqrt(np.sum(d1 ** 2, axis=1)) * np.sqrt(np.sum(d2 ** 2, axis=1))
     dot = normal @ (sense * plane.n)
     margin = (16.0 * _EPS + 2.0 * plane.alpha) * lengths
-    if not bool(np.all(thin | (dot > margin))):
+    positive = dot > margin                                 # the float filter certifies these
+    if not bool(np.all(thin | positive)):
         raise _invalid(face_id, _FOLD)
-    deltas = plane.offsets(points, chart)
-    per_triangle = np.max(deltas[triangles], axis=1) * (1.0 + 8.0 * _EPS) + rounding
+    # M1: a thin triangle the filter cannot certify is decided exactly; exempt only a zero normal
+    exempt_count = 0
+    undecided = np.flatnonzero(thin & ~positive)
+    if len(undecided):
+        exempt, folded = _thin_plane(points, triangles[undecided], plane.exact_normal, sense)
+        if bool(np.any(folded)):
+            raise _invalid(face_id, _FOLD)
+        exempt_count = int(np.count_nonzero(exempt))
+    bounds = _plane_point_bounds(face_id, plane, points, chart, face_tolerance, rounding, "TRIM_INVALID",
+                                 lambda worst: _DEVIATION)
+    per_triangle = np.max(bounds[triangles], axis=1)
     deviation = float(per_triangle.max())
     if not deviation <= face_tolerance:
         raise _invalid(face_id, _DEVIATION)
-    # Q6: the analytic trim distance, always reported, enforced only with tol.sag
-    trim = max(_trim_sag(face_id, model, samples, tol, curve) for ring in rings for samples, curve in ring.edges)
+    trim = _trim_bound(face_id, model, tol, rings, built)
     return dt.FaceDisplayMesh(face_id, dt._frozen(points), dt._frozen(triangles), dt._frozen(chart.copy()), k,
-                              dt._frozen(built.source), int(sense), face_tolerance, deviation, float(trim),
-                              int(np.count_nonzero(thin)))
+                              dt._frozen(built.source), int(sense), face_tolerance, deviation, trim, exempt_count)
+
+
+def _check_identification(face_id, built, face_tolerance):
+    """H1: the D1 identifications may move the lifted boundary by at most T_face."""
+    if not built.identify <= face_tolerance:
+        raise _invalid(face_id, _IDENTIFY)
+
+
+def _trim_bound(face_id, model, tol, rings, built):
+    """Q6 ``trim_sag_bound``: the N1 chords' certified distance from the analytic trim (always
+    reported, enforced only with tol.sag) plus every point N3 creates on the boundary: the cut
+    points' rounding (M2) and the D1 identifications' displacement (H1)."""
+    trim = max(_trim_sag(face_id, model, samples, tol, curve) for ring in rings for samples, curve in ring.edges)
+    if built.cut_rounding or built.identify:
+        trim = (trim + built.cut_rounding + built.identify) * (1.0 + 4.0 * _EPS)
+    return float(trim)
 
 
 # ----------------------------------------------------------------------------- cylinder
@@ -726,6 +985,26 @@ class _CylinderChart:
         return (32.0 * _EPS * (dt._norm(self.o) + self.r + height + size)
                 + 2.0 * dt._FRAME_ERROR * (self.r + height))
 
+    def radius(self, chart):
+        """The support radius at each chart point (a cylinder's is constant)."""
+        return np.full(len(chart), self.r)
+
+    def local_offsets(self, points, chart):
+        """``delta_loc = |w - S_loc(c)|`` with ``w = X - o`` and ``S_loc = rho (cos e1 + sin e2) +
+        h a`` (no ``o``: origin-relative magnitudes, M3 class)."""
+        theta, h = chart[:, 0], chart[:, 1]
+        rho = self.radius(chart)
+        mapped = (rho * np.cos(theta))[:, None] * self.e1 + (rho * np.sin(theta))[:, None] * self.e2 + h[:, None] * self.a
+        return np.sqrt(np.sum((points - self.o - mapped) ** 2, axis=1))
+
+    def local_rounding(self, points, chart):
+        """``A_loc``: ``A_face`` with ``|o| + max |X|`` replaced by ``W = max |X - o|`` (the
+        difference ``X - o`` rounds by half an ulp of its result): the rounding of the cosine, sine,
+        products and sums of ``S_loc``, of ``w - S_loc`` and of the frame; no world-scale term."""
+        size = float(np.sqrt(np.sum((points - self.o) ** 2, axis=1)).max())
+        height = float(np.abs(chart[:, 1]).max())
+        return 32.0 * _EPS * (self.r + height + size) + 2.0 * dt._FRAME_ERROR * (self.r + height)
+
 
 def _edge_maximum(vp, vq, tau):
     """The exact maximum over an edge of ``(1 - l) V_p + l V_q + l (1 - l) tau^2`` (module
@@ -737,9 +1016,13 @@ def _edge_maximum(vp, vq, tau):
 
 
 class _CylinderBound:
-    """The per-triangle paired-deviation bound ``E(T)`` of an assembled mesh (module docstring)."""
+    """The per-triangle paired-deviation bound ``E(T)`` of an assembled mesh (module docstring).
+    ``local``: the origin-relative variant (offsets and ``A_loc`` from
+    :meth:`_CylinderChart.local_offsets` / ``local_rounding``; the cut points' own rounding
+    ``rho`` bounded by ``cut_rounding`` from their chords' ends), used where N3b's bound exceeds
+    T_face (M3 class)."""
 
-    def __init__(self, cyl, k, ring_deltas, built, ring_rounding):
+    def __init__(self, cyl, k, ring_deltas, built, ring_rounding, local=False):
         r = cyl.r
         chart, ends, f = built.chart, built.ends, built.fraction
         theta, h = chart[:, 0], chart[:, 1]
@@ -756,11 +1039,17 @@ class _CylinderBound:
         self.theta = theta
         kt_max = float(kt.max()) if n else 0.0
         kh_max = float(kh.max()) if n else 0.0
-        size = float(np.sqrt(np.sum(built.points ** 2, axis=1)).max())
-        # A_face of the mesh points; without cut points they are the ring's (the same value)
-        self.rounding = ring_rounding if n == k else cyl.rounding(built.points, chart)
+        if local:
+            # the cuts' own rounding |rho| from their chords' ends (cut_rounding), not the world size
+            self.rounding = ring_rounding if n == k else cyl.local_rounding(built.points, chart)
+            cut = built.cut_rounding
+        else:
+            size = float(np.sqrt(np.sum(built.points ** 2, axis=1)).max())
+            # A_face of the mesh points; without cut points they are the ring's (the same value)
+            self.rounding = ring_rounding if n == k else cyl.rounding(built.points, chart)
+            cut = 16.0 * _EPS * size
         self.kt_max, self.kh_max, self.r = kt_max, kh_max, r
-        self.extra = self.rounding + 16.0 * _EPS * size + r * kt_max + kh_max
+        self.extra = self.rounding + cut + r * kt_max + kh_max
 
     def per_triangle(self, triangles):
         r = self.r
@@ -814,6 +1103,12 @@ def _lift_cylinder(model, face_id, tol, support, rings, extra):
     chord = (np.maximum(ring_deltas, ring_deltas[following]) * (1.0 + 8.0 * _EPS)
              + r * span ** 2 / 8.0 * (1.0 + 8.0 * _EPS) + ring_rounding)
     worst = float(chord.max())
+    local = None
+    if not worst <= face_tolerance:                         # M3 class: the origin-relative bound
+        local = (cyl.local_offsets(ring_points, ring_chart), cyl.local_rounding(ring_points, ring_chart))
+        chord = np.minimum(chord, np.maximum(local[0], local[0][following]) * (1.0 + 8.0 * _EPS)
+                           + r * span ** 2 / 8.0 * (1.0 + 8.0 * _EPS) + local[1])
+        worst = float(chord.max())
     if not worst <= face_tolerance:
         raise _refuse("EDGE_UNSUPPORTED", face_id, f"a boundary chord deviates from the cylinder by up to {worst!r}, "
                                                    f"above the face tolerance {face_tolerance!r}")
@@ -822,9 +1117,16 @@ def _lift_cylinder(model, face_id, tol, support, rings, extra):
     for attempt in range(_REFINE_ROUNDS + 1):
         mesh = triangulate_rings(charts, lines)
         built = _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure)
+        _check_identification(face_id, built, face_tolerance)
         bound = _CylinderBound(cyl, k, ring_deltas, built, ring_rounding)
         per_triangle, tt, width = bound.per_triangle(built.triangles)
         failing = ~(per_triangle <= face_tolerance)
+        if bool(np.any(failing)):
+            if local is None:
+                local = (cyl.local_offsets(ring_points, ring_chart), cyl.local_rounding(ring_points, ring_chart))
+            per_triangle = np.minimum(per_triangle, _CylinderBound(cyl, k, local[0], built, local[1],
+                                                                   local=True).per_triangle(built.triangles)[0])
+            failing = ~(per_triangle <= face_tolerance)
         if not bool(np.any(failing)):
             break
         if attempt == _REFINE_ROUNDS:
@@ -848,14 +1150,27 @@ def _lift_cylinder(model, face_id, tol, support, rings, extra):
     lo, hi = tt.min(axis=1), tt.max(axis=1)
     at_lo = sense * (p * np.cos(lo) + q * np.sin(lo))
     at_hi = sense * (p * np.cos(hi) + q * np.sin(hi))
-    if not bool(np.all(thin | ((at_lo > margin) & (at_hi > margin) & (width < math.pi)))):
+    positive = (at_lo > margin) & (at_hi > margin) & (width < math.pi)
+    if not bool(np.all(thin | positive)):
         raise _invalid(face_id, _FOLD)
+    exempt_count = _thin_decision(face_id, points, triangles, thin & ~positive, lo, hi, cyl, 0.0, sense)
     deviation = float(per_triangle.max())
-    # Q6: the analytic trim distance, always reported, enforced only with tol.sag
-    trim = max(_trim_sag(face_id, model, samples, tol, curve) for ring in rings for samples, curve in ring.edges)
+    trim = _trim_bound(face_id, model, tol, rings, built)
     return dt.FaceDisplayMesh(face_id, dt._frozen(points), dt._frozen(triangles), dt._frozen(chart.copy()), k,
-                              dt._frozen(built.source), int(sense), face_tolerance, deviation, float(trim),
-                              int(np.count_nonzero(thin)))
+                              dt._frozen(built.source), int(sense), face_tolerance, deviation, trim, exempt_count)
+
+
+def _thin_decision(face_id, points, triangles, undecided, lo, hi, chart, slope, sense):
+    """M1: the thin triangles the float filter cannot certify, decided by :func:`_thin_curved`;
+    a fold refuses, the exempt ones are counted."""
+    rows = np.flatnonzero(undecided)
+    if not len(rows):
+        return 0
+    exempt, folded = _thin_curved(points, triangles[rows], lo[rows], hi[rows], chart.e1, chart.e2, chart.a, slope,
+                                  sense)
+    if bool(np.any(folded)):
+        raise _invalid(face_id, _FOLD)
+    return int(np.count_nonzero(exempt))
 
 
 # ----------------------------------------------------------------------------- cone
@@ -901,6 +1216,17 @@ class _ConeChart(_CylinderChart):
         return (32.0 * _EPS * (dt._norm(self.o) + rho + height + size)
                 + 2.0 * dt._FRAME_ERROR * (rho + height) + self.rho_rounding(height))
 
+    def radius(self, chart):
+        return self.r0 + self.k * chart[:, 1]
+
+    def local_rounding(self, points, chart):
+        """``A_loc`` (:meth:`_CylinderChart.local_rounding` with ``rho`` and its rounding)."""
+        size = float(np.sqrt(np.sum((points - self.o) ** 2, axis=1)).max())
+        height = float(np.abs(chart[:, 1]).max())
+        rho = float(np.abs(self.r0 + self.k * chart[:, 1]).max()) + self.rho_rounding(height)
+        return (32.0 * _EPS * (rho + height + size) + 2.0 * dt._FRAME_ERROR * (rho + height)
+                + self.rho_rounding(height))
+
 
 def _check_apex(face_id, model, support, cone, ring_points):
     """A trim reaching the apex (a ring point within N1's apex rule of an exact zero radius) is
@@ -931,7 +1257,7 @@ class _ConeBound:
     docstring, Cone): the cylinder's bound with ``r`` replaced by the largest ``rho`` over the
     ring vertices under the triangle, plus the mixed term ``|k| |Cov_W(theta, h)|``."""
 
-    def __init__(self, cone, k, ring_deltas, ring_rho, built):
+    def __init__(self, cone, k, ring_deltas, ring_rho, built, ring_rounding=None, local=False):
         chart, ends, f = built.chart, built.ends, built.fraction
         theta, h = chart[:, 0], chart[:, 1]
         n = len(chart)
@@ -957,9 +1283,14 @@ class _ConeBound:
         self.rho_under = np.maximum(ring_rho[ja], ring_rho[jb])
         self.rho_slack = cone.rho_rounding(height) + self.slope * self.kh_max
         rho_all = float(self.rho_under.max()) + self.rho_slack
-        size = float(np.sqrt(np.sum(built.points ** 2, axis=1)).max())
-        self.rounding = cone.rounding(built.points, chart)
-        self.extra = (self.rounding + 16.0 * _EPS * size + rho_all * self.kt_max
+        if local:                        # the origin-relative variant (see :class:`_CylinderBound`)
+            self.rounding = ring_rounding if n == k else cone.local_rounding(built.points, chart)
+            cut = built.cut_rounding
+        else:
+            size = float(np.sqrt(np.sum(built.points ** 2, axis=1)).max())
+            self.rounding = cone.rounding(built.points, chart)
+            cut = 16.0 * _EPS * size
+        self.extra = (self.rounding + cut + rho_all * self.kt_max
                       + (1.0 + self.slope) * self.kh_max)
 
     def per_triangle(self, triangles):
@@ -1041,6 +1372,13 @@ def _lift_cone(model, face_id, tol, support, rings, extra):
              + (rho * span ** 2 / 8.0 + abs(cone.k) * span * rise / 4.0) * (1.0 + 8.0 * _EPS)
              + cone.rounding(ring_points, ring_chart))
     worst = float(chord.max())
+    local = None
+    if not worst <= face_tolerance:                         # M3 class: the origin-relative bound
+        local = (cone.local_offsets(ring_points, ring_chart), cone.local_rounding(ring_points, ring_chart))
+        chord = np.minimum(chord, np.maximum(local[0], local[0][following]) * (1.0 + 8.0 * _EPS)
+                           + (rho * span ** 2 / 8.0 + abs(cone.k) * span * rise / 4.0) * (1.0 + 8.0 * _EPS)
+                           + local[1])
+        worst = float(chord.max())
     if not worst <= face_tolerance:
         raise _refuse("EDGE_UNSUPPORTED", face_id, f"a boundary chord deviates from the cone by up to {worst!r}, "
                                                    f"above the face tolerance {face_tolerance!r}")
@@ -1049,9 +1387,16 @@ def _lift_cone(model, face_id, tol, support, rings, extra):
     for attempt in range(_REFINE_ROUNDS + 1):
         mesh = triangulate_rings(charts, lines)
         built = _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure)
+        _check_identification(face_id, built, face_tolerance)
         bound = _ConeBound(cone, k, ring_deltas, ring_rho, built)
         per_triangle, tt, width = bound.per_triangle(built.triangles)
         failing = ~(per_triangle <= face_tolerance)
+        if bool(np.any(failing)):
+            if local is None:
+                local = (cone.local_offsets(ring_points, ring_chart), cone.local_rounding(ring_points, ring_chart))
+            per_triangle = np.minimum(per_triangle, _ConeBound(cone, k, local[0], ring_rho, built, local[1],
+                                                               local=True).per_triangle(built.triangles)[0])
+            failing = ~(per_triangle <= face_tolerance)
         if not bool(np.any(failing)):
             break
         if attempt == _REFINE_ROUNDS:
@@ -1083,14 +1428,14 @@ def _lift_cone(model, face_id, tol, support, rings, extra):
     # rising at hi (footprint < pi); "possibly inside" within rounding is taken as inside
     inside = (-p * sin_lo + q * cos_lo <= margin) & (-p * sin_hi + q * cos_hi >= -margin)
     bottom = level - np.hypot(p, q)
-    if not bool(np.all(thin | ((at_lo > margin) & (at_hi > margin) & (width < math.pi)
-                               & (~inside | (bottom > margin))))):
+    positive = (at_lo > margin) & (at_hi > margin) & (width < math.pi) & (~inside | (bottom > margin))
+    if not bool(np.all(thin | positive)):
         raise _invalid(face_id, _FOLD)
+    exempt_count = _thin_decision(face_id, points, triangles, thin & ~positive, lo, hi, cone, cone.k, sense)
     deviation = float(per_triangle.max())
-    trim = max(_trim_sag(face_id, model, samples, tol, curve) for ring in rings for samples, curve in ring.edges)
+    trim = _trim_bound(face_id, model, tol, rings, built)
     return dt.FaceDisplayMesh(face_id, dt._frozen(points), dt._frozen(triangles), dt._frozen(chart.copy()), k,
-                              dt._frozen(built.source), int(sense), face_tolerance, deviation, float(trim),
-                              int(np.count_nonzero(thin)))
+                              dt._frozen(built.source), int(sense), face_tolerance, deviation, trim, exempt_count)
 
 
 # ----------------------------------------------------------------------------- entry
@@ -1108,7 +1453,10 @@ def _lift(model, face_id, tol, *, _extra_x=None):
         loops = (face.loop, *face.holes)
         _check_loops(face_id, loops)
         extra = _check_extra(_extra_x)
-        rings = [_ring(model, face_id, loop, tol) for loop in loops]
+        if len(loops) > _slab.MAX_SLAB_RINGS:                  # N2's ring cap, before any sampling
+            raise _slab._too_complex(f"{dt._id_text(len(loops))} rings (MAX_SLAB_RINGS = {_slab.MAX_SLAB_RINGS})")
+        budget = [0]
+        rings = [_ring(model, face_id, loop, tol, budget) for loop in loops]
         try:
             if isinstance(support, Plane):
                 return _lift_plane(model, face_id, tol, support, rings, extra)

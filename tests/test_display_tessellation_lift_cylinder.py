@@ -1,9 +1,10 @@
 """N3b: face display meshes on cylinders (SPEC-N3 section 4, slice N3b; SPEC-N3b).
 
 T8-T11 and the acceptance cases: every accepted mesh is checked against independent oracles: the
-exact (Fraction) chart combinatorics of the N3a tests and a 50-digit mpmath paired deviation and
-footprint orientation against the EXACT orthonormal frame about the support's axis (the frame
-the module's own float frame approximates).
+exact (Fraction) chart combinatorics of the N3a tests, a 50-digit mpmath paired deviation SAMPLED on
+a barycentric grid per triangle, and the exact minimum of the footprint orientation, against the
+EXACT orthonormal frame about the support's axis (the frame the module's own float frame
+approximates).
 """
 from __future__ import annotations
 
@@ -63,8 +64,28 @@ def _grid(n):
 GRID_33 = _grid(6) + [(1 / 3, 1 / 3, 1 / 3), (.7, .2, .1), (.1, .7, .2), (.2, .1, .7), (.45, .45, .1)]
 
 
+def _footprint_minimum(p, q, c0, lo, hi):
+    """The minimum over ``[lo, hi]`` of ``p cos t + q sin t + c0`` (mpmath): the ends and every
+    critical point inside, where ``R cos(t - phi)`` (``phi = atan2(q, p)``) has its minimum
+    ``t = phi + pi (mod 2 pi)``.  Exact to the working precision, not sampled (Codex N3 r1 L1:
+    nine samples missed an interior minimum)."""
+    def g(t):
+        return p * mp.cos(t) + q * mp.sin(t) + c0
+    values = [g(lo), g(hi)]
+    if p != 0 or q != 0:
+        t = mp.atan2(q, p) + mp.pi
+        t += 2 * mp.pi * mp.ceil((lo - t) / (2 * mp.pi))
+        while t <= hi:
+            values.append(g(t))
+            t += 2 * mp.pi
+    return min(values)
+
+
 def _check_cylinder(model, face, tol, mesh, grid=GRID_33, every=1):
-    """Independent oracles of every published claim of an accepted cylinder face mesh."""
+    """Independent oracles of every published claim of an accepted cylinder face mesh.  The paired
+    deviation is SAMPLED (a barycentric grid per triangle: a lower estimate of the maximum, checked
+    against the certified bound); the orientation is exact over the footprint
+    (:func:`_footprint_minimum`)."""
     support = model.faces[face].surface
     rings = N3a._n1_rings(model, face, tol)
     N3a._check_combinatorics(mesh, rings)
@@ -90,13 +111,15 @@ def _check_cylinder(model, face, tol, mesh, grid=GRID_33, every=1):
                 th = sum(mp.mpf(wi) * chart[i][0] for wi, i in zip(w, t))
                 h = sum(mp.mpf(wi) * chart[i][1] for wi, i in zip(w, t))
                 worst = max(worst, mp.sqrt(sum((xx - ss) ** 2 for xx, ss in zip(x, s_star(th, h)))))
-            # orientation over the footprint: sense x outward radial, at 9 azimuths
+            # orientation over the footprint: sense x outward radial, its exact minimum (the ends
+            # and the sinusoid's critical point, at 50 digits)
             p, q, s = (pts[i] for i in t)
             n = _mp_cross([y - x for x, y in zip(p, q)], [y - x for x, y in zip(p, s)])
             ths = [chart[i][0] for i in t]
             lo, hi = min(ths), max(ths)
-            if not all(mesh.sense * sum(nn * (mp.cos(tt) * x + mp.sin(tt) * y) for nn, x, y in zip(n, e1, e2)) > 0
-                       for tt in (lo + (hi - lo) * j / 8 for j in range(9))):
+            pc = mesh.sense * sum(nn * x for nn, x in zip(n, e1))
+            qc = mesh.sense * sum(nn * y for nn, y in zip(n, e2))
+            if not _footprint_minimum(pc, qc, mp.mpf(0), lo, hi) > 0:
                 folded += 1
                 width = mp.sqrt(sum(x * x for x in n)) / max(
                     mp.sqrt(sum((y - x) ** 2 for x, y in zip(u, v))) for u, v in ((p, q), (q, s), (s, p)))

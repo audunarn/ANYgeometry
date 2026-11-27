@@ -2,8 +2,8 @@
 
 T12-T13, the corpus cone faces and the frustum acceptance cases: every accepted mesh is checked
 against independent oracles: the exact (Fraction) chart combinatorics of the N3a tests and a
-50-digit mpmath paired deviation (``S*(theta, h) = o + rho(h) c(theta) + h a``, ``rho = r0 + k h``,
-``k = (r1 - r0) / (height |axis|)``) and footprint orientation (``c(theta) - k a``) against the EXACT
+50-digit mpmath paired deviation, sampled on a barycentric grid (``S*(theta, h) = o + rho(h) c(theta) + h a``, ``rho = r0 + k h``,
+``k = (r1 - r0) / (height |axis|)``) and the exact footprint minimum of the orientation (``c(theta) - k a``) against the EXACT
 orthonormal frame about the support's axis.
 """
 from __future__ import annotations
@@ -47,7 +47,9 @@ def _face_tolerance(model, face, tol):
 
 
 def _check_cone(model, face, tol, mesh, grid=C.GRID_33, every=1):
-    """Independent oracles of every published claim of an accepted cone face mesh."""
+    """Independent oracles of every published claim of an accepted cone face mesh.  The paired
+    deviation is SAMPLED (a barycentric grid per triangle, a lower estimate of the maximum); the
+    orientation is exact over the footprint (:func:`C._footprint_minimum`)."""
     support = model.faces[face].surface
     rings = N3a._n1_rings(model, face, tol)
     N3a._check_combinatorics(mesh, rings)
@@ -73,14 +75,16 @@ def _check_cone(model, face, tol, mesh, grid=C.GRID_33, every=1):
                 th = sum(mp.mpf(wi) * chart[i][0] for wi, i in zip(w, t))
                 h = sum(mp.mpf(wi) * chart[i][1] for wi, i in zip(w, t))
                 worst = max(worst, mp.sqrt(sum((xx - ss) ** 2 for xx, ss in zip(x, s_star(th, h)))))
-            # orientation over the footprint: sense x (c(theta) - k a), at 9 azimuths
+            # orientation over the footprint: sense x (c(theta) - k a), its exact minimum (the
+            # ends and the sinusoid's critical point, at 50 digits)
             p, q, s = (pts[i] for i in t)
             n = C._mp_cross([y - x for x, y in zip(p, q)], [y - x for x, y in zip(p, s)])
             na = sum(nn * z for nn, z in zip(n, a))
             ths = [chart[i][0] for i in t]
             lo, hi = min(ths), max(ths)
-            if not all(mesh.sense * (sum(nn * (mp.cos(tt) * x + mp.sin(tt) * y) for nn, x, y in zip(n, e1, e2)) - k * na)
-                       > 0 for tt in (lo + (hi - lo) * j / 8 for j in range(9))):
+            pc = mesh.sense * sum(nn * x for nn, x in zip(n, e1))
+            qc = mesh.sense * sum(nn * y for nn, y in zip(n, e2))
+            if not C._footprint_minimum(pc, qc, -mesh.sense * k * na, lo, hi) > 0:
                 folded += 1
                 width = mp.sqrt(sum(x * x for x in n)) / max(
                     mp.sqrt(sum((y - x) ** 2 for x, y in zip(u, v))) for u, v in ((p, q), (q, s), (s, p)))

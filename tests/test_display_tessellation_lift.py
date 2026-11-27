@@ -44,11 +44,11 @@ def _refused(code, call):
     return str(info.value)
 
 
-def _planar(rings, plane=XY):
+def _planar(rings, plane=XY, tolerance=None):
     """One planar face: ``rings[0]`` the outer loop, the rest holes; each ring a list of points
     (x, y[, z]) joined by lines in the given order.  The loops are set explicitly so the ring order
-    (and hence N2's indices) is the fixture's own."""
-    g = GeometryModel()
+    (and hence N2's indices) is the fixture's own.  ``tolerance``: the model's TolerancePolicy."""
+    g = GeometryModel() if tolerance is None else GeometryModel(tolerance=tolerance)
     loops = []
     for ring in rings:
         ids = [g.add_point(*p) for p in ring]
@@ -194,8 +194,10 @@ def _check_combinatorics(mesh, rings):
             lo, hi = sorted((mesh.chart[a, 0], mesh.chart[b, 0]))
             # a merged cut keeps one chord's source; on its other chord it is N2's cut there: its
             # ordinate is the chord's exact ordinate at its x, correctly rounded
+            # (and, in 3D, it lies within the reported trim bound of this chord: exact rationals)
             on |= {int(j) + k for j in np.flatnonzero((cut_x > lo) & (cut_x < hi))
-                   if _on_segment(mesh, int(j) + k, a, b) and _rounds_onto(mesh.chart, int(j) + k, a, b)}
+                   if _rounds_onto(mesh.chart, int(j) + k, a, b)
+                   and _on_chord(mesh.points[a], mesh.points[b], mesh.points[int(j) + k], mesh.trim_sag_bound)}
             xa, xb = q[a][0], q[b][0]
             on = sorted(on, key=lambda j: q[j][0] if xa < xb else -q[j][0])
             nodes = [a, *on, b]
@@ -205,6 +207,10 @@ def _check_combinatorics(mesh, rings):
         start += m
     assert max(counts.values()) <= 2
     assert used_once == {e for e, n in counts.items() if n % 2}
+    # a chain edge on two chords cancelled (D1): the trim interval it stands for is not on the mesh
+    # boundary, so the lifted interval must be within the reported trim bound of it (H1)
+    cancelled = sum(math.dist(*mesh.points[list(e)]) for e, n in counts.items() if n == 2)
+    assert cancelled <= mesh.trim_sag_bound, (cancelled, mesh.trim_sag_bound)
 
 
 def _rounds_onto(chart, j, a, b):
@@ -218,14 +224,35 @@ def _rounds_onto(chart, j, a, b):
 
 
 def _on_segment(mesh, j, a, b):
-    """Cut point ``j`` lies on the 3D N1 chord ``a``-``b`` (to rounding)."""
-    pa, pb, pj = mesh.points[a], mesh.points[b], mesh.points[j]
-    d = pb - pa
-    f = float((pj - pa) @ d / (d @ d))
-    # f may round onto (or an ulp past) 0 or 1: a slab line through another ring's vertex can cut a
-    # chord an ulp from its end (circle holes: cos(pi/3) vs the evaluated arc point), and the 3D
-    # cut A + f (B - A) is rounded
-    return -1e-12 <= f <= 1.0 + 1e-12 and np.linalg.norm(pa + f * d - pj) <= 1e-12 * max(1.0, float(np.abs(mesh.points).max()))
+    """Cut point ``j`` lies on the 3D N1 chord ``a``-``b`` to the rounding of ``A + f (B - A)``."""
+    return _on_chord(mesh.points[a], mesh.points[b], mesh.points[j])
+
+
+def _on_chord(pa, pb, pj, allowance=0.0):
+    """``pj`` within ``allowance`` plus the rounding of a float ``A + f (B - A)`` (``f`` in [0, 1])
+    of the segment ``pa``-``pb``, decided exactly (rationals).  The rounding: the difference, the
+    product and the sum each round by half an ulp of their result, at most ``2 eps (|A_i| + |B_i|)``
+    per coordinate; 4 eps is used.  (The test was ``1e-12 max |X|``: at 1.25e6 it took a point on
+    a chord 8e-9 away for one on this chord, Codex N3 r1 H1.)"""
+    eps = F(2) ** -52
+    A, B, P = ([F(float(x)) for x in p] for p in (pa, pb, pj))
+    d = [y - x for x, y in zip(A, B)]
+    w = [y - x for x, y in zip(A, P)]
+    dd = sum(x * x for x in d)
+    f = min(max(sum(x * y for x, y in zip(w, d)) / dd, F(0)), F(1)) if dd else F(0)
+    distance2 = sum((x - f * y) ** 2 for x, y in zip(w, d))
+    rounding2 = sum((4 * eps * (abs(x) + abs(y))) ** 2 for x, y in zip(A, B))
+    limit = F(allowance) + _sqrt_up(rounding2)
+    return distance2 <= limit * limit
+
+
+def _sqrt_up(x):
+    """A rational upper bound of the square root of a non-negative rational."""
+    if x == 0:
+        return F(0)
+    scale = 2 ** 80
+    n = x.numerator * scale * scale // x.denominator + 1
+    return F(math.isqrt(n) + 1, scale)
 
 
 def _naive_fraction_lift(result):

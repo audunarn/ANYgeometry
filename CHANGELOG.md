@@ -19,6 +19,17 @@ All notable user-visible changes to ANYgeometry are documented here.
   re-exported from `anygeometry`. No change to N1 or N2 results; the N3c speed work keeps the plane and cylinder lifts
   bit-identical to 57dc038 (400-face cylinder lift-only 255 -> 219 ms). See docs/DISPLAY_TESSELLATION.md, "Face lift
   (N3)".
+- N3 Codex round 1 (owner decisions H1, M1-M4, L1, recommended options): a D1 merge and the boundary-edge
+  cancellation it allows must hold in 3D (the merge distance plus the cancelled length is added to `trim_sag_bound` and
+  must be at most T_face, else `TRIM_INVALID`); a rounding-thin triangle is exempt only with an exactly zero normal (or,
+  on a curved support, a sign undecidable within the support normal's rounding), otherwise its orientation is decided
+  from the exact normal of the stored points (a fold is `TRIM_INVALID` at any world position); the cut points' rounding
+  is counted in `trim_sag_bound`; planar, cylinder and cone deviation bounds fall back to origin-relative magnitudes
+  (and, on a plane, an exact rational decision) where the world-scaled bound exceeds T_face; N2's ring-point and ring
+  caps are enforced while the rings are sampled (`OUT_OF_DOMAIN`, N2's text). Changed results: `trim_sag_bound` of faces
+  with cut points, `degenerate_count` (exempt triangles only), planar faces whose thin triangles truly fold through
+  slab lines an ulp from a vertex (refused), far-from-origin faces refused by rounding alone (accepted); points and
+  triangles of every other accepted face unchanged.
 
 - N2 round 8 (docs and tests only; supersedes the N3 wording of rounds 3-7 below): N2's contract states only what N2 guarantees (certified 2D
   mesh, closure coverage, `cut_ends`/`cut_fraction` as provenance, input/trust model, refusals,
