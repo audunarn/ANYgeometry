@@ -984,7 +984,7 @@ changed.
 | `OUT_OF_DOMAIN` | N1's and N2's domain refusals (N2's ring cap and its ring-point cap against the coedge count, "trim too complex for display: at least N ring points (MAX_SLAB_RING_POINTS = ...)", before the seam scan, R2 L3; the ring-point cap while the rings are sampled, with N2's text "... N ring points (...)", R1 M4); "a nonzero coordinate or support parameter is below 2**-200 in magnitude (the lift's domain)" (R2 M1/M2); "its plane's vectors are parallel to within a sine of 1e-12"; "its refinement needs more than 200000 slab lines (too complex)"; "its trim reaches the cone's apex (...)" |
 | `EDGE_UNSUPPORTED` | N1's edge refusals; "a boundary chord deviates from the plane / cylinder / cone by up to X, above the face tolerance T"; "edge E's drawn chords leave its curve by up to X, above the sag S" (only with `tol.sag`) |
 | `TRIM_INVALID` (trims) | "a loop has no coedges"; "consecutive coedges do not meet bit for bit"; "two ring points coincide in the chart"; N2's trim refusals (crossing, touching rings, ...) |
-| `TRIM_INVALID` (uncertified lifts) | "two mesh vertices coincide in the chart (lift not certified: ...)"; "the mesh boundary is not the chain of the ring chords (lift not certified)"; "a mesh edge is not shared by exactly two oppositely oriented triangles (lift not certified)"; "a chart triangle is not strictly counter-clockwise (lift not certified)"; "a lifted triangle folds against the face normal (lift not certified)"; "a lifted triangle's deviation bound exceeds the face tolerance (lift not certified)"; "merged cut points, or the ends of a boundary interval their merge cancels, are not bitwise equal in 3D (lift not certified: a gap in the trim)" (R3 C1); "a zero-area lifted triangle is not covered by the triangles kept beside it (lift not certified: it cannot be dropped)" (R3 C3); "an arithmetic error in the lift" |
+| `TRIM_INVALID` (uncertified lifts) | "two mesh vertices coincide in the chart (lift not certified: ...)"; "the mesh boundary is not the chain of the ring chords (lift not certified)"; "a mesh edge is not shared by exactly two oppositely oriented triangles (lift not certified)"; "a chart triangle is not strictly counter-clockwise (lift not certified)"; "a lifted triangle folds against the face normal (lift not certified)"; "a lifted triangle's deviation bound exceeds the face tolerance (lift not certified)"; "merged cut points, or the ends of a boundary interval their merge cancels, are not bitwise equal in 3D (lift not certified: a gap in the trim)" (R3 C1); "a zero-area lifted triangle is not covered by the triangles kept beside it (lift not certified: it cannot be dropped)" (R3 C3); "the lifted boundary is not simple: its projection back to the chart crosses or touches itself (lift not certified: lifted triangles may overlap)", "the lifted boundary's loops are not nested as the trim's: not exactly one positively oriented loop in the projection back to the chart (lift not certified)", "a lifted triangle's projection back to the chart is not positively oriented (lift not certified: lifted triangles may overlap)", "a lifted point is too close to the support's axis, or too far from its chart point, for the projection back to the chart (lift not certified)" (R4); "an arithmetic error in the lift" |
 
 ### Evidence
 
@@ -1168,3 +1168,123 @@ dropped triangles as a witness): planar 1134 / 1200 accepted (`n3r3-planar-fuzz.
 "rounding-thin (exempt) triangles" now counts dropped zero-area triangles. Timing vs 692e819
 within noise (`n3r3-bench.txt`: tripod 18 skins 75.6 -> 76.9 ms, 400-face cylinder 775 -> 774 ms,
 polygon400_holes20 62.7 -> 62.1 ms at 7.5 deg). All display tests: `n3r3-display-run.txt`.
+
+### Codex round 4 (R4): global injectivity of the lift
+
+`tests/test_display_tessellation_lift_n3r4.py` holds the reproductions (all 12 failing on 5c4d38c:
+`n3r4-old-run.txt`). Codex's r4 High: a topology-valid cylinder face whose chart is certified and
+whose lifted triangles are each oriented and within the deviation bound, yet two lifted triangles
+cover the same open patch: the two sides of a notch are 1e-5 apart in the chart, less than the
+lifted chords' azimuth deviation (about 1e-4), so the lifted sides cross. The same CLASS as r2 H2
+(chart non-overlap plus per-triangle orientation does not imply that the lifted triangles do not
+overlap in 3D), now through a chord deviation instead of a winding. The aborted run's lead (a loop
+that self-crosses in 3D on the plane x = 1 but not in the chart, forced in topology-invalid) was
+accepted with overlapping triangles too.
+
+**Decision (owner standing approval, recommended option): a certificate implying global 3D
+injectivity**, not another local check (`_check_projection`, run last on every accepted mesh, so no
+earlier refusal or accepted output changes):
+
+- **The projection.** `P` maps 3D back to the chart and is a function on a neighbourhood of the
+  support: on a plane `P(X) = ((X - o).e1, (X - o).e2)`; on a cylinder and a cone `P(X) =
+  (azimuth of (x, y), z)` with `(x, y, z) = M (X - o)`, `M` the rows `e1, e2, a`. The module's FLOAT
+  frame vectors are taken as exact rationals: `P` is then an exactly defined map (it need not be
+  orthonormal) whose predicates are rational. Two distinct points of the lifted mesh at the same 3D
+  position have the same `P`, so it suffices that `P` maps the published mesh injectively.
+  Preconditions (refused `TRIM_INVALID` otherwise): every mesh point's distance from the axis in
+  M-space `rho > 16 err` (`err = 4 eps |fl(X - o)|_1` bounds `x, y, z`), its computed azimuth within
+  pi / 4 of its chart azimuth (the unwrapping), every published triangle's P-azimuth range below pi
+  (so it misses the axis), every boundary edge's below pi / 2 (exact `cross2` comparisons of pairs),
+  and the whole mesh's P-azimuth range below 2 pi (`TRIM_WINDS_SUPPORT`: `P` single-valued, the
+  branch cut outside the mesh). On a cone the trim already avoids the apex (`rho > 0`, T13).
+- **(i) Local.** Every published triangle's P-image is positively oriented: the Jacobian of `P` on
+  the flat triangle. Plane: `n . (e1 x e2)` (float filter `24 eps |d1| |d2|`, else the exact normal
+  against the exact `e1 x e2`). Cylinder and cone: `n . (cos t f1 + sin t f2)`, `f1 = e2 x a`, `f2 =
+  a x e1` (Binet-Cauchy: `(M d1 x M d2) . (cos t, sin t, 0)`), over the triangle's P-azimuth range
+  (the hull of its vertices' azimuths, widened by their error bounds; a convex set in an open
+  half-plane through the axis). Filter `40 eps |d1| |d2|` at both ends (an arc argument as for
+  Q7), else exactly: the vertices' exact azimuths checked inside the range with the rational
+  cosine/sine enclosures, then `_thin_curved` with the exact frame `(f1, f2)` and `E = 0`. **How Q7
+  relates:** on a plane Q7's sign `n . (u x v)` is the Jacobian of the orthogonal projection, the
+  float frame's `e1 x e2` within `alpha` of it, so (i) is a second decision of the same quantity
+  (no accepted face changed); on a cylinder Q7's `n . c*(t)` is the Jacobian of the orthonormal
+  `P*` over the chart footprint, (i) the float frame's over the P-azimuth range (they differ by the
+  frame error and by the cut points' chart-vs-lift azimuths); **on a cone they differ in kind**:
+  Q7 uses the support normal `n . (c - k a)`, `P`'s Jacobian is `n . c` (radial, perpendicular to
+  the axis): a triangle whose normal is far from the radial direction (a steep `k`) can pass Q7 and
+  fold under `P`; (i) refuses it (test).
+- **(ii) Boundary.** The P-image of the lifted boundary chain (the published mesh's boundary edges,
+  after the chart chain's D1 cancellations; chain vertices with bitwise-equal lifted points, which
+  C3 makes when two cuts an ulp apart in the chart lift onto one point, are one point and the
+  zero-length edge between them is dropped) must be a set of pairwise disjoint simple closed
+  curves: every vertex once a tail and once a head; adjacent edges meet only at their shared
+  vertex; non-adjacent ones not at all. On a curved support the P-image of a lifted chord is a
+  curve (`z` linear, the azimuth monotone), so the predicates are exact on the curve, not on its
+  chord: two edges meet iff a common height and a common ray (`cross2 = 0`; the pair's azimuths lie
+  within pi) is reached at parameters in `[0, 1]`; with the heights eliminated `cross2` is a
+  quadratic in one parameter, and a root in the feasible interval is decided exactly (ends and the
+  rational vertex); adjacent edges from `B` (`U = A - B`, `V = C - B`) meet again iff `s Uz = t Vz`
+  and `s (cross2(U, B) + (Uz / Vz) cross2(B, V)) + s^2 (Uz / Vz) cross2(U, V) = 0` at `0 < s, t <=
+  1` (linear after the root `s = 0`), horizontal edges by their azimuth intervals. Candidates: the
+  adjacent pairs behind a float filter (apart in azimuth, apart in height, or `|alpha'| > min(|Uz|,
+  |Vz|) |beta|`; plane: not collinear or pointing apart), the non-adjacent pairs from a sweep over
+  the edges' bounding boxes (sorted by azimuth, `O(n log n + pairs)`; more than 4e6 box pairs is
+  `OUT_OF_DOMAIN`). Otherwise `TRIM_INVALID` ("the lifted boundary is not simple").
+- **(iii) Nesting.** Each loop's orientation at its lexicographically smallest P-vertex (exact:
+  the azimuth is monotone along every edge, so the extreme is a vertex; the sign of the tangents'
+  cross product there, `cross2(v, W) Uz - Wz cross2(v, U)`, on a plane the orientation of `v`,
+  next, previous). Exactly one loop may be positive (the outer one, holding vertex 0), the others
+  negative; else `TRIM_INVALID` ("not nested as the trim's").
+
+**Argument** (preconditions above). Let `F = P o L` on the chart region `R` (`L` the lift by
+vertices, affine on each chart triangle). By (i) `F` is an orientation-preserving local
+homeomorphism on every published triangle (and injective on it: two of its points on one fibre ray
+would put the ray in the triangle's plane, where the Jacobian vanishes). For a point `y` off the
+image of the edges and of the dropped zero-area triangles (a null set), the degree of `F` at `y`
+is the number of its preimages (each counts +1) and equals the winding number of `F(dR)` around
+`y` (the boundary chain's image, a zero-length chain edge a point). By (ii) and (iii) that is the
+sum over disjoint simple closed curves of +1 inside the one positive loop and -1 inside each
+negative one, hence at most 1. So no two published triangles' P-images share an interior point
+(their interiors are open sets, and a.e. point of an intersection would have two preimages); as
+`P` is a function on 3D, no two published lifted triangles share an interior point in 3D, and the
+boundary curves are injective. As the degree is also `>= 0` everywhere, every negative loop lies
+inside the positive one and outside the others: the trim's nesting.
+
+Codex's notch face and the lead are refused ("the lifted boundary is not simple"). The oracles:
+`_check_cylinder` and `_check_cone` now call `_projection_overlaps`, an independent EXACT test of
+P-image overlap (P about the stored axis direction, in Fractions; every pair of mesh edges meets
+at most at a shared vertex, no vertex strictly inside another triangle's P-image (its fibre ray
+meets the triangle's interior), every triangle P-positive, 50 digits): the Codex mesh with the
+certificate switched off fails it.
+
+| class: chart-only reasoning for a 3D property | where | outcome |
+|---|---|---|
+| chart covering implies a 3D covering | `_combinatorial` (Q2) | kept (a chart statement); 3D non-overlap now by the P certificate |
+| chart extent below 2 pi implies a single sheet | `_check_extent` (H2) | kept; the P certificate also checks the lifted points' own P-azimuth range |
+| triangle orientation over the CHART footprint | Q7 (`_thin_decision`, plane filter) | kept (Q7 is a statement about the paired support normal); the P-Jacobian (i) over the lifted P-azimuth range added |
+| cut points ordered along their chord in the chart | `_combinatorial` chain order | the lifted cuts' order (rounded `A + f (B - A)`) is now covered by (ii) (adjacent chain edges meet only at their shared vertex) |
+| distinct chart points are distinct 3D points | `_merge`, `_RING_COINCIDE`, E2 join | identifications bitwise in 3D (C1, unchanged); two chain points equal in 3D are one point in (ii) and a self-touch is refused; equal in 3D interior points are covered by (i)-(iii) |
+| chart notch width vs chord deviation | the r4 High | (ii) |
+| winding / sheet of the chart | `_unwrap`, `_join` | unchanged (r2 H2); P single-valued by its own range check |
+| zero-area triangles dropped | `_drop_zero` | exact 3D coverage (unchanged); null set in the degree argument |
+| deviation bounds | `_CylinderBound`, `_ConeBound`, plane bounds | paired (3D point vs `S*` of its chart point): a 3D property by construction, unchanged |
+
+Changed results vs 5c4d38c (`n3r2_bits.py`, `n3r4-bits-compare-raw.txt`): none. Every face of the
+bit-identity sets (1200 planar fuzz faces and the planar corpus/bench faces, 763 cylinder and 447
+cone fuzz faces, every corpus plane, cylinder and cone face at both steps) has the same outcome and,
+when accepted, bit-identical output; the tripod skins and the 400-face cylinder stay accepted.
+Fuzz on the r4 tree (0 oracle failures with the new overlap oracle, 0 raw exceptions each, same
+accept counts as r3): planar 1134 / 1200 (`n3r4-planar-fuzz.txt`), cylinder 1148 / 1177
+(`n3r4-cylinder-fuzz.txt`), cone 947 / 1046 (`n3r4-cone-fuzz.txt`). Timing vs 5c4d38c
+(`n3r4-bench-raw.txt`, 7.5 / 22.5 deg, loaded PC): tripod 18 skins 76.0 -> 82.1 / 51.8 -> 56.6 ms
+(+8 / +9 %), 400-face cylinder 780 -> 888 / 787 -> 896 ms (+14 %), polygon400_holes20 62.8 -> 76.2
+/ 59.6 -> 67.7 ms (+21 / +13 %). Reasons: the certificate is new work on every accepted face, about
+0.25 ms fixed per face in NumPy call overhead (the 400-face cylinder's faces have 4 triangles
+each); on the jittered polygon about 520 non-adjacent boundary edge pairs pass the float filters
+(ulp-short chain edges from slab lines an ulp apart) and are decided exactly, and 625 sliver
+triangles' P orientation goes exact.
+
+Remaining assumption (documented, as for the float filters since N3b): the libm `atan2`, `cos`,
+`sin` within a few ulps in the float filters and in the boxes that prune candidate pairs; every
+decision the filters cannot make is exact (rationals; the azimuth enclosures of (i)'s fallback are
+the fixed-point ones of C3).

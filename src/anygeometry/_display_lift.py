@@ -169,6 +169,17 @@ is kept only if certifiably positive over its footprint (exact normal, an enclos
 support normal, :func:`_thin_curved`, :func:`_cos_sin`), a zero exact normal is dropped and
 counted (:func:`_drop_zero`), anything else is a fold.  L2: the ring cap before the ring list is
 built.
+
+Codex round 4 (owner standing approval, the recommended option; docs "Codex round 4"): the class
+"chart non-overlap plus per-triangle orientation does not imply that the LIFTED triangles do not
+overlap in 3D" (r2 H2 via winding, r4 H1 via a notch narrower than the chord deviation) is closed by
+a global certificate (:func:`_check_projection`): a projection P from 3D back to the chart (the
+plane's orthogonal-frame projection; on a cylinder or cone (azimuth, axial coordinate)), defined on
+the whole lifted mesh, maps it injectively: (i) every published triangle's P-image is positively
+oriented, (ii) the P-image of the lifted boundary is a set of disjoint simple closed curves, (iii)
+exactly one of them positively oriented (the trim's nesting).  A local homeomorphism of the chart
+region whose boundary maps injectively onto curves of winding number at most 1 has degree at most 1,
+so no two published triangles' P-images (hence lifted triangles) share an interior point.
 """
 from __future__ import annotations
 
@@ -586,7 +597,8 @@ def _combinatorial(face_id, rings, chart, triangles, cut_ends, signs, remap=None
     the zero-width spike between two chords, cancel); the triangles are mapped and must stay
     proper; every other check runs on the merged mesh (the caller, :func:`_merge`, has decided
     injectivity).  The cancelled chain edges (their N2 tail and head indices) are appended to
-    ``cancelled`` when given.  Returns the (mapped) triangles."""
+    ``cancelled`` when given.  Returns the (mapped) triangles and ``(codes, n)``: the chain's
+    directed edges ``tail * n + head`` (merged indices, the region on their left; Codex N3 r4)."""
     n = len(chart)
     k = sum(len(r.points) for r in rings)
     ring_of, following = _ring_structure(rings) if structure is None else structure
@@ -597,7 +609,7 @@ def _combinatorial(face_id, rings, chart, triangles, cut_ends, signs, remap=None
         # (the general construction below gives the same set of edges)
         along = np.array([(signs[r] > 0) if r == 0 else (signs[r] < 0) for r in range(len(rings))])[ring_of]
         expected_codes = np.where(along, position * n + following, following * n + position)
-        return _triangle_edges(face_id, chart, triangles, n, expected_codes)
+        return _triangle_edges(face_id, chart, triangles, n, expected_codes), (expected_codes, n)
     # the chord of each cut point: its ends must be consecutive ring vertices
     if len(a) and not (bool(np.all((a >= 0) & (a < k) & (b >= 0) & (b < k)))):
         raise _invalid(face_id, _CHAIN)
@@ -654,7 +666,7 @@ def _combinatorial(face_id, rings, chart, triangles, cut_ends, signs, remap=None
             cancelled.append((np.concatenate([t for t, _ in expected])[cancel],
                               np.concatenate([h for _, h in expected])[cancel]))
         expected_codes = expected_codes[~cancel]
-    return _triangle_edges(face_id, chart, triangles, n, expected_codes)
+    return _triangle_edges(face_id, chart, triangles, n, expected_codes), (expected_codes, n)
 
 
 def _triangle_edges(face_id, chart, triangles, n, expected_codes):
@@ -721,7 +733,7 @@ class _Assembled:
     from its exact 3D chord (M2).  The D1 identifications move no lifted point (C1,
     :func:`_check_identified`)."""
     __slots__ = ("points", "triangles", "chart", "ends", "fraction", "source", "sense", "following",
-                 "cut_rounding")
+                 "cut_rounding", "chain")
 
 
 def _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure=None) -> _Assembled:
@@ -749,17 +761,18 @@ def _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure=N
     # chord per coordinate (the difference, the product and the sum, half an ulp of each result)
     out.cut_rounding = _cut_rounding(start, finish) if len(cuts) else 0.0
     if remap is None:
-        triangles = _combinatorial(face_id, rings, chart, triangles, ends, signs, structure=structure)
+        triangles, (codes, size) = _combinatorial(face_id, rings, chart, triangles, ends, signs, structure=structure)
     else:
         merged_chart = chart[kept]
         cancelled = []
-        triangles = _combinatorial(face_id, rings, chart, triangles, ends, signs, remap, merged_chart, structure,
-                                   cancelled)
+        triangles, (codes, size) = _combinatorial(face_id, rings, chart, triangles, ends, signs, remap, merged_chart,
+                                                  structure, cancelled)
         _check_identified(face_id, np.vstack((ring_points, cuts)), representative, *cancelled[0])
         keep = kept[k:] - k
         chart, cuts, ends, fraction = merged_chart, cuts[keep], ends[keep], fraction[keep]
     out.points = np.vstack((ring_points, cuts))
     out.triangles, out.chart, out.ends, out.fraction, out.sense = triangles, chart, ends, fraction, sense
+    out.chain = (codes // size, codes % size)                 # the boundary chain (Codex N3 r4)
     # a cut point's source is its chord's: the interval starting at the chord's first ring vertex
     source = np.vstack([r.source for r in rings])
     following = structure[1]
@@ -995,7 +1008,7 @@ def _cos_sin(theta):
             Fraction(sine - error, scale), Fraction(sine + error, scale))
 
 
-def _thin_curved(points, rows, lo, hi, e1, e2, axis, k, sense):
+def _thin_curved(points, rows, lo, hi, e1, e2, axis, k, sense, frame=None):
     """M1 / C3 on a cylinder (``k = 0``) or cone: the orientation of each triangle the float filter
     cannot certify, over its footprint ``[lo, hi]``, from the EXACT normal ``n`` of its stored
     points (integers, :func:`_exact_normals`) and an ENCLOSURE of the support normal (owner
@@ -1023,15 +1036,22 @@ def _thin_curved(points, rows, lo, hi, e1, e2, axis, k, sense):
 
     Then ``g* >= g - E > 0`` over the footprint: certifiably positive.  An exactly zero normal is
     returned as zero (dropped and counted by the caller).  Everything is exact rational arithmetic
-    on the stored floats; scale-invariant (Codex N3 r2 M1).  Returns ``(zero, folded)``."""
+    on the stored floats; scale-invariant (Codex N3 r2 M1).  Returns ``(zero, folded)``.
+
+    ``frame`` (Codex N3 r4, :func:`_projection_triangles`): three exact rational vectors used as
+    ``(e1, e2, axis)`` with no frame error (``E = 0``): the sign of ``sense n . (cos t f1 + sin t
+    f2)`` exactly, the Jacobian of the projection back to the chart (``k`` must then be 0)."""
     zero = np.zeros(len(rows), dtype=bool)
     folded = np.zeros(len(rows), dtype=bool)
     normals, _, _ = _exact_normals(points, np.asarray(rows))
-    frame = [[Fraction(float(x)) for x in vector] for vector in (e1, e2, axis)]
     slope = Fraction(float(k))
-    kerr = 8 * Fraction(_EPS) * abs(slope)
-    fe = Fraction(dt._FRAME_ERROR)
-    factor = _SQRT2_UP * fe + (abs(slope) + kerr) * fe + kerr * (1 + fe)
+    if frame is None:
+        frame = [[Fraction(float(x)) for x in vector] for vector in (e1, e2, axis)]
+        kerr = 8 * Fraction(_EPS) * abs(slope)
+        fe = Fraction(dt._FRAME_ERROR)
+        factor = _SQRT2_UP * fe + (abs(slope) + kerr) * fe + kerr * (1 + fe)
+    else:
+        factor = Fraction(0)
     half_turn = Fraction(math.pi)                       # the float pi, below pi
     ends = {}
 
@@ -1120,6 +1140,7 @@ def _lift_plane(model, face_id, tol, support, rings, extra):
     if not deviation <= face_tolerance:
         raise _invalid(face_id, _DEVIATION)
     triangles = _drop_zero(face_id, points, triangles, zero)
+    _check_projection(face_id, _PlaneProjection(plane, points), points, triangles, sense, built.chain)
     trim = _trim_bound(face_id, model, tol, rings, built)
     return dt.FaceDisplayMesh(face_id, dt._frozen(points), dt._frozen(triangles), dt._frozen(chart.copy()), k,
                               dt._frozen(built.source), int(sense), face_tolerance, deviation, trim, len(zero))
@@ -1455,6 +1476,8 @@ def _lift_cylinder(model, face_id, tol, support, rings, extra):
     zero = _thin_decision(face_id, points, triangles, ~positive, lo, hi, cyl, 0.0, sense)
     deviation = float(per_triangle.max())
     triangles = _drop_zero(face_id, points, triangles, zero)
+    _check_projection(face_id, _CurvedProjection(face_id, cyl, points, chart[:, 0]), points, triangles, sense,
+                      built.chain)
     trim = _trim_bound(face_id, model, tol, rings, built)
     return dt.FaceDisplayMesh(face_id, dt._frozen(points), dt._frozen(triangles), dt._frozen(chart.copy()), k,
                               dt._frozen(built.source), int(sense), face_tolerance, deviation, trim, len(zero))
@@ -1730,9 +1753,597 @@ def _lift_cone(model, face_id, tol, support, rings, extra):
     zero = _thin_decision(face_id, points, triangles, ~positive, lo, hi, cone, cone.k, sense)
     deviation = float(per_triangle.max())
     triangles = _drop_zero(face_id, points, triangles, zero)
+    _check_projection(face_id, _CurvedProjection(face_id, cone, points, chart[:, 0]), points, triangles, sense,
+                      built.chain)
     trim = _trim_bound(face_id, model, tol, rings, built)
     return dt.FaceDisplayMesh(face_id, dt._frozen(points), dt._frozen(triangles), dt._frozen(chart.copy()), k,
                               dt._frozen(built.source), int(sense), face_tolerance, deviation, trim, len(zero))
+
+
+# ----------------------------------------------------------------------------- global injectivity (Codex N3 r4)
+#
+# The chart certificate (Q2) and the per-triangle orientation (Q7) do not imply that the LIFTED
+# triangles do not overlap in 3D (Codex r2 H2 via winding, r4 H1 via a notch narrower than the chord
+# deviation).  So the lift also certifies that a projection P from 3D back to the chart maps the
+# published mesh injectively (docs, "Global injectivity"):
+#
+#   Plane     P(X) = ((X - o).e1, (X - o).e2)                       (a linear map of rank 2)
+#   Cylinder  P(X) = (azimuth of (x, y), z),  (x, y, z) = M (X - o)  (M the rows e1, e2, a)
+#   Cone      the cylinder's P (valid away from the axis)
+#
+# with the module's FLOAT frame vectors taken as exact rationals (P is then an exactly defined
+# function whose predicates are rational; it need not be orthonormal).  Certified:
+#   (i)   every published triangle's P-image is positively oriented (the Jacobian of P on the flat
+#         triangle: ``n . (e1 x e2)`` on a plane, ``n . (cos t f1 + sin t f2)`` with ``f1 = e2 x a``,
+#         ``f2 = a x e1`` over the triangle's P-azimuth range on a cylinder or cone);
+#   (ii)  the P-image of the lifted boundary chain is a set of pairwise disjoint simple closed
+#         curves (non-adjacent boundary edges disjoint, adjacent ones meeting only at their shared
+#         vertex; exact rational predicates after a sweep over the edges' bounding boxes);
+#   (iii) exactly one of these loops is positively oriented (the outer one), the others negative.
+# Then the degree of P on the chart region is at most 1 everywhere (the winding number of the
+# boundary image), every published triangle's P-image counts +1 where it lies, so no two published
+# triangles' P-images share an interior point; and two lifted triangles sharing an interior point
+# in 3D would have P-images sharing one.
+
+_NOT_SIMPLE = ("the lifted boundary is not simple: its projection back to the chart crosses or touches itself "
+               "(lift not certified: lifted triangles may overlap)")
+_NESTING = ("the lifted boundary's loops are not nested as the trim's: not exactly one positively oriented loop in "
+            "the projection back to the chart (lift not certified)")
+_PROJECTED = ("a lifted triangle's projection back to the chart is not positively oriented (lift not certified: "
+              "lifted triangles may overlap)")
+_NEAR_AXIS = ("a lifted point is too close to the support's axis, or too far from its chart point, for the "
+              "projection back to the chart (lift not certified)")
+#: the largest P-azimuth span of one lifted boundary edge (exact comparisons need pairs within pi)
+_EDGE_SPAN = 0.5 * math.pi
+#: the most box-overlapping boundary edge pairs the sweep enumerates (else OUT_OF_DOMAIN)
+_MAX_BOX_PAIRS = 4_000_000
+
+
+# Float filters below bound a product of inputs known to within absolute errors: ``|p~ q~ - p q| <=
+# |p~| eq + |q~| ep + ep eq`` plus the product's own rounding (summed over the 1-norms of the xy
+# parts); a sign is certain beyond the bound times ``1 + 64 eps`` plus an underflow slack (the
+# bound's own rounding; what the filters cannot decide goes exact).
+
+
+def _scale_bits(*arrays):
+    """The smallest ``k`` (at most 1074) with every value of the arrays times ``2^k`` an integer:
+    ``53 - e`` for the smallest ``frexp`` exponent ``e`` of a nonzero value (its ulp is ``2^(e -
+    53)``)."""
+    values = np.abs(np.concatenate([np.asarray(x, dtype=float).ravel() for x in arrays]))
+    values = values[values > 0.0]
+    if not len(values):
+        return 0
+    return int(min(1074, max(0, 53 - int(np.frexp(values)[1].min()))))
+
+
+def _fixed(vector, k):
+    """Binary64 values as exact integers over the scale ``2^k`` (:func:`_scale_bits`: every value an
+    integer multiple of ``2^-k``): homogeneous exact predicates without Fraction normalisation."""
+    out = []
+    for x in vector:
+        n, d = float(x).as_integer_ratio()
+        if (1 << k) % d:                                    # cannot happen with _scale_bits' k
+            raise ArithmeticError("a value is not on the exact scale")
+        out.append(n * ((1 << k) // d))
+    return out
+
+
+def _rational_cross(u, v):
+    return [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
+
+
+def _cross2(p, q):
+    return p[0] * q[1] - p[1] * q[0]
+
+
+def _differences(points, ends, base, rows):
+    """``M (X_end - X_base)`` per frame row (``rows`` the float frame vectors, exact as rationals:
+    P's coordinates are linear in ``X``, so this is exactly the difference of the P coordinates),
+    from the 3D difference ``fl(X_end - X_base)`` (half an ulp per component) and the dot's three
+    products and two sums: each component within ``e = 4 eps |fl(X_end - X_base)|_1`` (raised for
+    its own rounding), relative to the DIFFERENCE, not to the points' distance from the origin, so
+    ulp-short boundary edges decide in floats.  ``ends`` may have a leading axis."""
+    d = points[ends] - points[base]
+    out = np.stack([d[..., 0] * r[0] + d[..., 1] * r[1] + d[..., 2] * r[2] for r in rows], axis=-1)
+    e = 4.0 * _EPS * np.sum(np.abs(d), axis=-1) * (1.0 + 8.0 * _EPS) + _UNDERFLOW
+    return out, e
+
+
+class _PlaneProjection:
+    """``P(X) = ((X - o).e1, (X - o).e2)``, the plane chart's float frame as exact rationals.
+    ``u, v``: the computed P of every mesh point (the chart's own formula), ``err`` a bound of the
+    absolute error of each (``fl(X - o)`` half an ulp, the dot's three products and two sums:
+    within ``4 eps |fl(X - o)|_1``, raised for its own rounding)."""
+    curved = False
+
+    def __init__(self, plane, points):
+        d = points - plane.o
+        e1, e2 = plane.e1, plane.e2
+        self.u = d[:, 0] * e1[0] + d[:, 1] * e1[1] + d[:, 2] * e1[2]
+        self.v = d[:, 0] * e2[0] + d[:, 1] * e2[1] + d[:, 2] * e2[2]
+        self.err = 4.0 * _EPS * np.sum(np.abs(d), axis=1) * (1.0 + 8.0 * _EPS) + _UNDERFLOW
+        self.uv = np.column_stack((self.u, self.v))
+        self.points, self._plane = points, plane
+        #: P's kernel direction e1 x e2 (float; exactly in :attr:`normal`): the Jacobian sign is
+        #: n . (e1 x e2)
+        self.normal_f = _cross3(e1, e2)
+        self._o = None
+        self._cache = {}
+
+    def _setup(self):
+        plane = self._plane
+        self._k = _scale_bits(self.points, plane.o)
+        k = _scale_bits(plane.e1, plane.e2)
+        self._o, self._e1, self._e2 = _fixed(plane.o, self._k), _fixed(plane.e1, k), _fixed(plane.e2, k)
+
+    @property
+    def normal(self):
+        if self._o is None:
+            self._setup()
+        return _rational_cross(self._e1, self._e2)
+
+    def exact(self, i):
+        """The exact P of mesh point ``i`` (integers over a common power-of-two scale)."""
+        hit = self._cache.get(i)
+        if hit is None:
+            if self._o is None:
+                self._setup()
+            d = [x - y for x, y in zip(_fixed(self.points[i], self._k), self._o)]
+            hit = (sum(x * y for x, y in zip(d, self._e1)), sum(x * y for x, y in zip(d, self._e2)))
+            self._cache[i] = hit
+        return hit
+
+    # (ii) adjacent boundary edges (A -> B -> C): meet only at B
+    def adjacent_decided(self, a, b, c):
+        """Float filter: True where ``BA`` and ``BC`` certainly meet only at ``B`` (not collinear, or
+        pointing apart).  ``W[0] = U``, ``W[1] = V`` within ``e`` per component (the ends' err plus
+        the difference's rounding); products bounded by the rule above, on 1-norms."""
+        W, e = _differences(self.points, np.stack((a, c)), b, (self._plane.e1, self._plane.e2))
+        aw = np.abs(W)
+        nw = aw[..., 0] + aw[..., 1]
+        orient = W[0, :, 0] * W[1, :, 1] - W[0, :, 1] * W[1, :, 0]
+        dot = W[0, :, 0] * W[1, :, 0] + W[0, :, 1] * W[1, :, 1]
+        bound = (nw[0] * e[1] + nw[1] * e[0] + 2.0 * e[0] * e[1] + 2.0 * _EPS * nw[0] * nw[1]) * (1.0 + 64.0 * _EPS)
+        bound = bound + _UNDERFLOW
+        # -orient (= (C - B) x (A - B)) is also the loop's turn at B (:meth:`turn`)
+        return (np.abs(orient) > bound) | (dot < -bound), -orient, bound
+
+    def apart(self, p, q, r, s):
+        """Float filter for non-adjacent segments ``pq``, ``rs``: True where ``r`` and ``s`` lie
+        certainly strictly on one side of the line ``pq``, or ``p`` and ``q`` of the line ``rs``."""
+        rows = (self._plane.e1, self._plane.e2)
+
+        def side(base, tip, x, y):
+            W, e = _differences(self.points, np.stack((tip, x, y)), base, rows)
+            aw = np.abs(W)
+            nw = aw[..., 0] + aw[..., 1]
+            o = W[0, :, 0] * W[1:, :, 1] - W[0, :, 1] * W[1:, :, 0]
+            bound = (nw[0] * e[1:] + nw[1:] * e[0] + 2.0 * e[0] * e[1:] + 2.0 * _EPS * nw[0] * nw[1:]) * (
+                1.0 + 64.0 * _EPS) + _UNDERFLOW
+            return ((o[0] > bound[0]) & (o[1] > bound[1])) | ((o[0] < -bound[0]) & (o[1] < -bound[1]))
+        return side(p, q, r, s) | side(r, s, p, q)
+
+    def adjacent_meet(self, a, b, c):
+        pb, pa, pc = self.exact(b), self.exact(a), self.exact(c)
+        u = (pa[0] - pb[0], pa[1] - pb[1])
+        v = (pc[0] - pb[0], pc[1] - pb[1])
+        return _cross2(u, v) == 0 and u[0] * v[0] + u[1] * v[1] >= 0
+
+    def meet(self, a, b, c, d):
+        """The closed segments ``P(a) P(b)`` and ``P(c) P(d)`` (no shared index) intersect."""
+        pa, pb, pc, pd = self.exact(a), self.exact(b), self.exact(c), self.exact(d)
+        o1 = _sign(_orient_points(pa, pb, pc))
+        o2 = _sign(_orient_points(pa, pb, pd))
+        o3 = _sign(_orient_points(pc, pd, pa))
+        o4 = _sign(_orient_points(pc, pd, pb))
+        if o1 * o2 > 0 or o3 * o4 > 0:
+            return False
+        if o1 or o2 or o3 or o4:
+            return True
+        # collinear (both segments non-degenerate: a zero-length edge is refused as adjacent first):
+        # their projections onto the line overlap
+        axis = 0 if pa[0] != pb[0] else 1
+        lo1, hi1 = sorted((pa[axis], pb[axis]))
+        lo2, hi2 = sorted((pc[axis], pd[axis]))
+        return lo1 <= hi2 and lo2 <= hi1
+
+    # (iii) orientation of a loop at its lexicographically smallest vertex
+    def smaller(self, i, j):
+        return self.exact(i) < self.exact(j)
+
+    def turn(self, prev, vertex, nxt):
+        """The sign of the loop's turn at its lexicographic minimum: ``(P(next) - P(v)) x (P(prev) -
+        P(v))`` (positive: counter-clockwise)."""
+        pv, pw, pu = self.exact(vertex), self.exact(nxt), self.exact(prev)
+        return _sign(_orient_points(pv, pw, pu))
+
+
+def _orient_points(a, b, c):
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+class _CurvedProjection:
+    """``P(X) = (azimuth of (x, y), z)`` with ``(x, y, z) = M (X - o)``, ``M`` the rows ``e1, e2, a``
+    of the module's float axis frame as exact rationals (the cylinder's and the cone's P).  ``u`` is
+    the computed azimuth of every mesh point, unwrapped onto its chart azimuth's sheet; ``v = z``.
+    Error bounds: ``x, y, z`` within ``err = 4 eps |fl(X - o)|_1`` each; the azimuth within ``aerr =
+    2.2 err / rho + 8 eps (1 + |u|) + |turns| (2.5e-16 + 8 eps)`` (the angle subtended by the
+    ``sqrt(2) err`` disk at distance ``rho >= 16 err``, the libm ``atan2`` within a few ulps (the
+    module's documented assumption, as for the float filters), the unwrapping by the float 2 pi).
+    A point with ``rho <= 16 err``, or whose azimuth is more than pi / 4 from its chart azimuth, is
+    refused (``TRIM_INVALID``): P is certified only away from the axis."""
+    curved = True
+
+    def __init__(self, face_id, chart, points, theta):
+        d = points - chart.o
+        e1, e2, a = chart.e1, chart.e2, chart.a
+        x = d[:, 0] * e1[0] + d[:, 1] * e1[1] + d[:, 2] * e1[2]
+        y = d[:, 0] * e2[0] + d[:, 1] * e2[1] + d[:, 2] * e2[2]
+        z = d[:, 0] * a[0] + d[:, 1] * a[1] + d[:, 2] * a[2]
+        err = 4.0 * _EPS * np.sum(np.abs(d), axis=1) * (1.0 + 8.0 * _EPS) + _UNDERFLOW
+        rho = np.hypot(x, y)
+        if not bool(np.all(rho > 16.0 * err)):
+            raise _invalid(face_id, _NEAR_AXIS)
+        raw = np.arctan2(y, x)
+        turns = np.round((theta - raw) / _TWO_PI)
+        u = raw + turns * _TWO_PI
+        if not bool(np.all(np.abs(u - theta) <= 0.25 * math.pi)):
+            raise _invalid(face_id, _NEAR_AXIS)
+        self.xyz, self.u, self.v, self.err = np.column_stack((x, y, z)), u, z, err
+        self.aerr = (2.2 * err / rho + 8.0 * _EPS * (1.0 + np.abs(u))
+                     + np.abs(turns) * (2.5e-16 + 8.0 * _EPS)) * (1.0 + 8.0 * _EPS)
+        self.points, self._chart = points, chart
+        #: the Jacobian frame f1 = e2 x a, f2 = a x e1 (float; exactly in :attr:`frame`)
+        self.f1, self.f2 = _cross3(e2, a), _cross3(a, e1)
+        self._m = None
+        self._cache = {}
+
+    def _setup(self):
+        chart = self._chart
+        self._k = _scale_bits(self.points, chart.o)
+        k = _scale_bits(chart.e1, chart.e2, chart.a)
+        self._o, self._m = _fixed(chart.o, self._k), [_fixed(chart.e1, k), _fixed(chart.e2, k), _fixed(chart.a, k)]
+
+    @property
+    def frame(self):
+        """``(f1, f2, a)`` exactly (integers over a common power-of-two scale)."""
+        if self._m is None:
+            self._setup()
+        return [_rational_cross(self._m[1], self._m[2]), _rational_cross(self._m[2], self._m[0]), self._m[2]]
+
+    def exact(self, i):
+        hit = self._cache.get(i)
+        if hit is None:
+            if self._m is None:
+                self._setup()
+            d = [x - y for x, y in zip(_fixed(self.points[i], self._k), self._o)]
+            hit = tuple(sum(x * y for x, y in zip(d, row)) for row in self._m)
+            self._cache[i] = hit
+        return hit
+
+    def adjacent_decided(self, a, b, c):
+        """Float filter for ``A -> B -> C``: True where the two edges' P-images certainly meet only at
+        ``B``: they leave ``B`` to opposite sides in azimuth (``cross2(B, BA)``, ``cross2(B, BC)``) or
+        in height, or ``|alpha'| > min(|Uz|, |Vz|) |beta|`` (docs: a second meeting needs ``0 < s, t
+        <= 1``)."""
+        # W[0] = U = A - B, W[1] = V = C - B (M-space floats), each component within e (the ends'
+        # err plus the difference's own rounding); products bounded by |p q - p~ q~| <= |p| eq +
+        # |q| ep + ep eq plus their rounding (the rule above, on 1-norms of the xy parts)
+        xyz, err = self.xyz, self.err
+        B = xyz[b]
+        chart = self._chart
+        W, e = _differences(self.points, np.stack((a, c)), b, (chart.e1, chart.e2, chart.a))
+        eb = err[b]
+        aw = np.abs(W)
+        nw = aw[..., 0] + aw[..., 1]
+        nb = np.abs(B[:, 0]) + np.abs(B[:, 1])
+        cross = B[:, 0] * W[..., 1] - B[:, 1] * W[..., 0]                    # cross2(B, U), cross2(B, V)
+        ecross = nb * e + nw * eb + 2.0 * eb * e + 2.0 * _EPS * nb * nw
+        z, ez = W[..., 2], e
+        margin = 1.0 + 64.0 * _EPS
+        cpos, cneg = cross > ecross * margin + _UNDERFLOW, cross < -(ecross * margin + _UNDERFLOW)
+        zpos, zneg = z > ez * margin + _UNDERFLOW, z < -(ez * margin + _UNDERFLOW)
+        apart = (cpos[0] & cneg[1]) | (cneg[0] & cpos[1]) | (zpos[0] & zneg[1]) | (zneg[0] & zpos[1])
+        # alpha' = Uz cross2(B, V) - Vz cross2(B, U); beta = cross2(U, V)
+        az_, ac = np.abs(z), np.abs(cross)
+        alpha = z[0] * cross[1] - z[1] * cross[0]
+        ealpha = (az_[0] * ecross[1] + ac[1] * ez[0] + ez[0] * ecross[1] + az_[1] * ecross[0] + ac[0] * ez[1]
+                  + ez[1] * ecross[0] + 2.0 * _EPS * (az_[0] * ac[1] + az_[1] * ac[0]))
+        beta = W[0, :, 0] * W[1, :, 1] - W[0, :, 1] * W[1, :, 0]
+        ebeta = nw[0] * e[1] + nw[1] * e[0] + 2.0 * e[0] * e[1] + 2.0 * _EPS * nw[0] * nw[1]
+        reach = np.minimum(az_[0] + ez[0], az_[1] + ez[1]) * (np.abs(beta) + ebeta) * (1.0 + 4.0 * _EPS)
+        gap = np.abs(alpha) - reach
+        far = gap > (ealpha + _EPS * (np.abs(alpha) + reach)) * margin + _UNDERFLOW
+        # alpha' is also the loop's turn at B (:meth:`turn` with prev A, next C)
+        return apart | far, alpha, ealpha * margin + _UNDERFLOW
+
+    def apart(self, p, q, r, s):
+        """No float filter for non-adjacent curve pairs (rare after the boxes): all go exact."""
+        return np.zeros(len(p), dtype=bool)
+
+    def adjacent_meet(self, a, b, c):
+        """Exactly: the P-images of ``BA`` and ``BC`` meet at a point other than ``P(B)``.  With ``U =
+        A - B``, ``V = C - B`` (M-space), a second meeting is ``B + s U``, ``B + t V`` at the same
+        height (``s Uz = t Vz``) and on the same ray (``cross2 = 0``; the edges span less than pi / 2,
+        so a zero cross product is the same azimuth), ``0 < s, t <= 1``."""
+        pb, pa, pc = self.exact(b), self.exact(a), self.exact(c)
+        u = [x - y for x, y in zip(pa, pb)]
+        v = [x - y for x, y in zip(pc, pb)]
+        cu, cv = _cross2(pb, u), _cross2(pb, v)
+        if u[2] == 0 and v[2] == 0:
+            return cu == 0 or cv == 0 or _sign(cu) == _sign(cv)
+        if u[2] == 0 or v[2] == 0:
+            return (cu if u[2] == 0 else cv) == 0                  # a horizontal radial edge collapses
+        if _sign(u[2]) != _sign(v[2]):
+            return False
+        alpha = u[2] * cv - v[2] * cu
+        beta = _cross2(u, v)
+        if beta == 0:
+            return alpha == 0
+        s = Fraction(-alpha, u[2] * beta)
+        t = Fraction(-alpha, v[2] * beta)
+        return 0 < s <= 1 and 0 < t <= 1
+
+    def meet(self, a, b, c, d):
+        """Exactly: the P-images of the segments ``ab`` and ``cd`` (no shared index) meet: a common
+        height and a zero ``cross2`` (same azimuth: the pair's azimuths lie within pi)."""
+        p1, q1, p2, q2 = self.exact(a), self.exact(b), self.exact(c), self.exact(d)
+        u = [x - y for x, y in zip(q1, p1)]
+        v = [x - y for x, y in zip(q2, p2)]
+        if u[2] == 0 and v[2] == 0:
+            if p1[2] != p2[2]:
+                return False
+            return _angular_overlap(p1, q1, p2, q2)
+        if v[2] == 0:
+            p1, u, p2, v = p2, v, p1, u
+        # t(s) = t0 + t1 s from the heights; the s-interval where 0 <= t <= 1
+        t0, t1 = Fraction(p1[2] - p2[2], v[2]), Fraction(u[2], v[2])
+        lo, hi = Fraction(0), Fraction(1)
+        if t1 == 0:
+            if not 0 <= t0 <= 1:
+                return False
+        else:
+            ends = sorted(((-t0) / t1, (1 - t0) / t1))
+            lo, hi = max(lo, ends[0]), min(hi, ends[1])
+            if lo > hi:
+                return False
+        w = [p2[0] + t0 * v[0], p2[1] + t0 * v[1]]
+        c0 = _cross2(p1, w)
+        c1 = _cross2(u, w) + t1 * _cross2(p1, v)
+        c2 = t1 * _cross2(u, v)
+
+        def q(s):
+            return c0 + s * (c1 + s * c2)
+        ql, qh = q(lo), q(hi)
+        if ql == 0 or qh == 0 or _sign(ql) != _sign(qh):
+            return True
+        if c2 != 0:
+            vertex = -c1 / (2 * c2)
+            if lo < vertex < hi and _sign(q(vertex)) != _sign(ql):
+                return True
+        return False
+
+    def smaller(self, i, j):
+        """Lexicographic (azimuth, height) order of two mesh points whose azimuths are close."""
+        pi_, pj = self.exact(i), self.exact(j)
+        c = _cross2(pi_, pj)
+        if c != 0:
+            return c > 0
+        return pi_[2] < pj[2]
+
+    def turn(self, prev, vertex, nxt):
+        """The sign of ``t_out x t_back`` at the loop's lexicographic minimum, ``t = (cross2(v, W) /
+        |v|^2, Wz)`` the P-image tangent of the edge toward ``W``."""
+        pv, pw, pu = self.exact(vertex), self.exact(nxt), self.exact(prev)
+        w = [x - y for x, y in zip(pw, pv)]
+        u = [x - y for x, y in zip(pu, pv)]
+        return _sign(_cross2(pv, w) * u[2] - w[2] * _cross2(pv, u))
+
+
+def _angular_overlap(p1, q1, p2, q2):
+    """Two azimuth intervals (of horizontal edges at one height, each under pi / 2 and within pi of
+    each other) intersect: exact ``cross2`` comparisons."""
+    def ordered(p, q):
+        return (p, q) if _cross2(p, q) >= 0 else (q, p)
+    a1, b1 = ordered(p1, q1)
+    a2, b2 = ordered(p2, q2)
+    return _cross2(a1, b2) >= 0 and _cross2(a2, b1) >= 0
+
+
+def _projection_triangles(face_id, proj, points, triangles, sense):
+    """(i): every published triangle's P-image positively oriented (``triangles`` in the published
+    orientation; the N2 orientation's normal is ``sense`` times theirs).  Float filter, else exact
+    (C3 style, no margin)."""
+    if not len(triangles):
+        return
+    a, b, c = points[triangles[:, 0]], points[triangles[:, 1]], points[triangles[:, 2]]
+    d1, d2 = b - a, c - a
+    normal = _cross(d1, d2)
+    lengths = np.sqrt(np.sum(d1 ** 2, axis=1)) * np.sqrt(np.sum(d2 ** 2, axis=1))
+    if not proj.curved:
+        # |nT_f - nT| about 3 sqrt(3) eps |d1||d2|, |N_f - N| 2 sqrt(3) eps, the dot 3 eps: 24 eps
+        value = sense * (normal @ proj.normal_f)
+        undecided = np.flatnonzero(~(value > 24.0 * _EPS * lengths + _UNDERFLOW))
+        if not len(undecided):
+            return
+        normals, _, _ = _exact_normals(points, triangles[undecided])
+        reference = proj.normal
+        for n in normals:
+            if not sense * (n[0] * reference[0] + n[1] * reference[1] + n[2] * reference[2]) > 0:
+                raise _invalid(face_id, _PROJECTED)
+        return
+    # curved: the triangle's P-azimuth range, its vertices' azimuths widened by their bounds
+    u, aerr = proj.u[triangles], proj.aerr[triangles]
+    lo = np.nextafter(np.min(u - aerr, axis=1), -np.inf)
+    hi = np.nextafter(np.max(u + aerr, axis=1), np.inf)
+    if not bool(np.all(hi - lo < math.pi)):
+        raise _invalid(face_id, _PROJECTED)
+    p = sense * (normal @ proj.f1)
+    q = sense * (normal @ proj.f2)
+    bound = 40.0 * _EPS * lengths + _UNDERFLOW
+    positive = ((p * np.cos(lo) + q * np.sin(lo) > bound) & (p * np.cos(hi) + q * np.sin(hi) > bound))
+    rows = np.flatnonzero(~positive)
+    if not len(rows):
+        return
+    # exact: the vertices' exact azimuths inside [lo, hi] (no libm assumption), then the sign of
+    # n . (cos t f1 + sin t f2) over [lo, hi] exactly (:func:`_thin_curved`, E = 0)
+    for r in rows.tolist():
+        at_lo, at_hi = _cos_sin(float(lo[r])), _cos_sin(float(hi[r]))
+        if at_lo is None or at_hi is None:
+            raise _invalid(face_id, _PROJECTED)
+        for i in triangles[r].tolist():
+            x, y, _ = proj.exact(i)
+            cl, ch, sl, sh = at_lo
+            after_lo = (y * cl if y >= 0 else y * ch) - (x * sh if x >= 0 else x * sl)        # cross2(c(lo), v)
+            cl, ch, sl, sh = at_hi
+            before_hi = (x * sl if x >= 0 else x * sh) - (y * ch if y >= 0 else y * cl)       # cross2(v, c(hi))
+            if not (after_lo > 0 and before_hi > 0):
+                raise _invalid(face_id, _PROJECTED)
+    zero, folded = _thin_curved(points, triangles[rows], lo[rows], hi[rows], None, None, None, 0.0, sense,
+                                frame=proj.frame)
+    if bool(np.any(folded | zero)):
+        raise _invalid(face_id, _PROJECTED)
+
+
+def _box_pairs(lo_u, hi_u, lo_v, hi_v):
+    """The pairs of boxes that overlap (closed), by a sweep over the boxes sorted by ``lo_u``."""
+    m = len(lo_u)
+    order = np.argsort(lo_u, kind="stable")
+    slo, shi = lo_u[order], hi_u[order]
+    end = np.searchsorted(slo, shi, side="right")
+    counts = np.maximum(end - np.arange(m) - 1, 0)
+    total = int(counts.sum())
+    if total > _MAX_BOX_PAIRS:
+        raise _slab._too_complex(f"{total} overlapping boundary edge boxes (more than {_MAX_BOX_PAIRS})")
+    first = np.repeat(np.arange(m), counts)
+    offset = np.arange(total) - np.repeat(np.cumsum(counts) - counts, counts)
+    i, j = order[first], order[first + 1 + offset]
+    keep = (lo_v[i] <= hi_v[j]) & (lo_v[j] <= hi_v[i])
+    return i[keep], j[keep]
+
+
+def _check_boundary(face_id, proj, tails, heads):
+    """(ii) and (iii) on the boundary chain ``tails[e] -> heads[e]`` (mesh indices, the region on
+    the left in the chart): every vertex once a tail and once a head; adjacent edges meet only at
+    their shared vertex, non-adjacent ones not at all (P-images; boxes, float filters, exact
+    predicates); exactly one positively oriented loop, and it holds vertex 0 if the chain does
+    (the outer ring's first vertex).  ``TRIM_INVALID`` otherwise."""
+    tails, heads = np.asarray(tails, dtype=np.int64), np.asarray(heads, dtype=np.int64)
+    u, v, err = proj.u, proj.v, proj.err
+    # chain vertices whose lifted points are bitwise equal are one point (C3: two cuts an ulp apart
+    # in the chart lift onto one point; the zero-length chain edge between them lies in a dropped
+    # zero-area triangle): identify them and drop the zero-length edges.  A genuine self-touch then
+    # shows as a vertex used twice (refused below).  Equal points have equal computed P: only
+    # P-equal pairs are compared bitwise.
+    order = np.argsort(u[tails], kind="stable")
+    ut, vt = u[tails][order], v[tails][order]
+    if bool(np.any((ut[1:] == ut[:-1]) & (vt[1:] == vt[:-1]))):
+        bits = _bits(proj.points[tails])
+        order = np.lexsort((bits[:, 2], bits[:, 1], bits[:, 0]))
+        same = np.all(bits[order][1:] == bits[order][:-1], axis=1)
+        if bool(np.any(same)):
+            canon = np.arange(len(proj.points), dtype=np.int64)
+            group = np.concatenate(([0], np.cumsum(~same)))
+            first = order[np.concatenate(([0], np.flatnonzero(~same) + 1))]
+            canon[tails[order]] = tails[first[group]]
+            tails, heads = canon[tails], canon[heads]
+            keep = tails != heads
+            tails, heads = tails[keep], heads[keep]
+    m = len(tails)
+    order = np.argsort(tails, kind="stable")
+    ordered_tails = tails[order]
+    if m < 3 or bool(np.any(ordered_tails[1:] == ordered_tails[:-1])) or not np.array_equal(ordered_tails,
+                                                                                            np.sort(heads)):
+        raise _invalid(face_id, _NOT_SIMPLE)
+    following = order[np.searchsorted(ordered_tails, heads)]          # the edge after edge e
+    ends = np.stack((tails, heads))
+    eu = proj.aerr if proj.curved else err
+    ue, eue, ve, eve = u[ends], eu[ends], v[ends], err[ends]
+    if proj.curved and not bool(np.all(np.abs(ue[0] - ue[1]) + eue[0] + eue[1] < _EDGE_SPAN)):
+        raise _invalid(face_id, _NOT_SIMPLE)
+    lo_u = np.nextafter(np.min(ue - eue, axis=0), -np.inf)
+    hi_u = np.nextafter(np.max(ue + eue, axis=0), np.inf)
+    lo_v = np.nextafter(np.min(ve - eve, axis=0), -np.inf)
+    hi_v = np.nextafter(np.max(ve + eve, axis=0), np.inf)
+    # adjacent edges e = (A -> B) and following[e] = (B -> C)
+    a, b, c = tails, heads, heads[following]
+    decided, turns, turn_errors = proj.adjacent_decided(a, b, c)
+    for e in np.flatnonzero(~decided).tolist():
+        if proj.adjacent_meet(int(a[e]), int(b[e]), int(c[e])):
+            raise _invalid(face_id, _NOT_SIMPLE)
+    # non-adjacent edges whose boxes overlap (all pairs for a short chain, else the sweep)
+    if m <= 12:
+        lu, hu, lv, hv, nxt = lo_u.tolist(), hi_u.tolist(), lo_v.tolist(), hi_v.tolist(), following.tolist()
+        near = [(e, f) for e in range(m) for f in range(e + 1, m)
+                if lu[f] <= hu[e] and lu[e] <= hu[f] and lv[f] <= hv[e] and lv[e] <= hv[f] and nxt[e] != f and nxt[f] != e]
+    else:
+        first, second = _box_pairs(lo_u, hi_u, lo_v, hi_v)
+        keep = (following[first] != second) & (following[second] != first)
+        near = list(zip(first[keep].tolist(), second[keep].tolist()))
+    if near:
+        pair = np.array(near, dtype=np.int64)
+        e_, f_ = pair[:, 0], pair[:, 1]
+        near = pair[~proj.apart(tails[e_], heads[e_], tails[f_], heads[f_])].tolist()
+    for e, f in near:
+        if proj.meet(int(tails[e]), int(heads[e]), int(tails[f]), int(heads[f])):
+            raise _invalid(face_id, _NOT_SIMPLE)
+    # (iii) the loops: each edge's smallest edge index along its cycle (a walk for short chains,
+    # pointer jumping for long ones)
+    if m <= 256:
+        label, nxt = [-1] * m, following.tolist()
+        for start in range(m):
+            if label[start] < 0:
+                e = start
+                while label[e] < 0:
+                    label[e] = start
+                    e = nxt[e]
+        label = np.array(label)
+    else:
+        label, jump = np.arange(m), following.copy()
+        for _ in range(int(m).bit_length() + 1):
+            label = np.minimum(label, label[jump])
+            jump = jump[jump]
+    previous = np.empty(m, dtype=np.int64)
+    previous[following] = np.arange(m)
+    positive = []
+    loops = [0] if bool(np.all(label == 0)) else np.unique(label).tolist()
+    for loop in loops:
+        edges = np.flatnonzero(label == loop)
+        key, key_err = u[tails[edges]], eu[tails[edges]]
+        candidates = edges[key - key_err <= float(np.min(key + key_err))].tolist()
+        best = candidates[0]
+        for e in candidates[1:]:
+            if proj.smaller(int(tails[e]), int(tails[best])):
+                best = e
+        # the turn at the vertex: the pair (previous[best], best) has B = tails[best]; its float
+        # value decides when certain, else exactly
+        pair = int(previous[best])
+        if turns[pair] > turn_errors[pair]:
+            turn = 1
+        elif turns[pair] < -turn_errors[pair]:
+            turn = -1
+        else:
+            turn = proj.turn(int(tails[pair]), int(tails[best]), int(heads[best]))
+        if turn == 0:
+            raise _invalid(face_id, _NESTING)
+        if turn > 0:
+            positive.append(edges)
+    if len(positive) != 1:
+        raise _invalid(face_id, _NESTING)
+    if bool(np.any(tails == 0)) and not bool(np.any(tails[positive[0]] == 0)):
+        raise _invalid(face_id, _NESTING)
+
+
+def _check_projection(face_id, proj, points, triangles, sense, chain):
+    """Codex N3 r4: the global injectivity certificate (module section above; docs "Global
+    injectivity"): (i) on the published triangles, (ii)-(iii) on the boundary chain; on a curved
+    support also the whole mesh's P-azimuth range below 2 pi (P a single-valued function there)."""
+    if proj.curved:
+        lo, hi = float(np.min(proj.u - proj.aerr)), float(np.max(proj.u + proj.aerr))
+        if not hi - lo < _TWO_PI * (1.0 - 4.0 * _EPS):
+            raise _refuse("TRIM_WINDS_SUPPORT", face_id, _EXTENT)
+    _projection_triangles(face_id, proj, points, triangles, sense)
+    _check_boundary(face_id, proj, *chain)
 
 
 # ----------------------------------------------------------------------------- entry

@@ -56,6 +56,17 @@ All notable user-visible changes to ANYgeometry are documented here.
   692e819: the grid-aligned polygon400_holes20 (both steps) and 7 of the 1200 planar fuzz faces (all in the private
   ulp-slab "extra" mode) are refused; 59 planar, 37 cylinder and 20 cone fuzz faces lose their zero-area triangles from
   `triangles` (everything else identical); tripod skins, the 400-face cylinder and every other corpus face unchanged.
+- N3 Codex round 4 (owner standing approval, recommended option): a global injectivity certificate of the lift
+  replaces chart-only reasoning for 3D non-overlap (Codex r4 H1: a notch narrower than the chord deviation, accepted
+  with two lifted triangles covering one patch). A projection P back to the chart (plane: the float frame's linear
+  projection; cylinder and cone: azimuth and axial coordinate in the float axis frame, all as exact rationals) must
+  map the published mesh injectively: every published triangle's P-image positively oriented (on a cone `n . c`,
+  not the support normal), the P-image of the lifted boundary a set of disjoint simple closed curves (exact
+  predicates on the projected curves after a bounding-box sweep), exactly one loop positive. Otherwise `TRIM_INVALID`
+  (new texts: "the lifted boundary is not simple", "not nested as the trim's", "a lifted triangle's projection back
+  to the chart is not positively oriented", a point too close to the axis). The cylinder and cone test oracles check
+  P-image overlap exactly. No change on the bit-identity sets vs 5c4d38c (planar fuzz and corpus, cylinder and cone
+  fuzz, every corpus plane, cylinder and cone face at both steps; tripod skins and the 400-face cylinder accepted).
 
 - N2 round 8 (docs and tests only; supersedes the N3 wording of rounds 3-7 below): N2's contract states only what N2 guarantees (certified 2D
   mesh, closure coverage, `cut_ends`/`cut_fraction` as provenance, input/trust model, refusals,

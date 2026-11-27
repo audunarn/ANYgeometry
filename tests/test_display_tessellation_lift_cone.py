@@ -87,6 +87,7 @@ def _check_cone(model, face, tol, mesh, grid=C.GRID_33, every=1):
             if not minimum > 0:
                 C._check_exempt(n, minimum, k, (p, q, s), mesh)
         assert worst <= bound, (float(worst), mesh.deviation_bound)
+    C._check_no_overlap(support, mesh)                 # Codex N3 r4: no 3D overlap, exactly
     return mesh
 
 

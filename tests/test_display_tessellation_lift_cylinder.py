@@ -8,7 +8,9 @@ approximates).
 """
 from __future__ import annotations
 
+import bisect
 import math
+from fractions import Fraction as F
 
 import mpmath as mp
 import numpy as np
@@ -122,7 +124,191 @@ def _check_cylinder(model, face, tol, mesh, grid=GRID_33, every=1):
             if not minimum > 0:
                 _check_exempt(n, minimum, 0, (p, q, s), mesh)
         assert worst <= bound, (float(worst), mesh.deviation_bound)
+    _check_no_overlap(support, mesh)                   # Codex N3 r4: no 3D overlap, exactly
     return mesh
+
+
+def _exact_cross2(p, q, w):
+    return sum(x * y for x, y in zip(_mp_cross(p, q), w))
+
+
+def _projection_overlaps(support, mesh):
+    """EXACT oracle of 3D overlap (Codex N3 r4): the published triangles' images under the exact
+    projection ``P = (azimuth about the stored axis direction w, axial coordinate (X - o) . w)``
+    (Fractions of the stored floats; P is a function near the support away from the axis) have
+    pairwise disjoint interiors.  Two lifted triangles sharing an interior point in 3D have
+    P-images sharing one.  Checked, after a float box prefilter (margin 1e-9): every pair of mesh
+    edges meets at most at a shared vertex (and only there), no vertex lies strictly inside another
+    triangle's P-image (the fibre ray through it meets the triangle's interior), and every triangle's
+    P-image is positively oriented (``n . radial`` over its P-azimuth range, 50 digits).  Points
+    with bitwise-equal coordinates are one point.  Returns the offending items (empty: no overlap)."""
+    w = [F(float(x)) for x in support.axis]
+    o = [F(float(x)) for x in support.origin]
+    ww = sum(x * x for x in w)
+    key, canon = {}, []
+    for i, p in enumerate(mesh.points.tolist()):
+        canon.append(key.setdefault(tuple(p), i))
+    radial, height = {}, {}
+    for i in set(canon):
+        d = [F(x) - y for x, y in zip(mesh.points[i].tolist(), o)]
+        z = sum(x * y for x, y in zip(d, w))
+        radial[i] = [x - z / ww * y for x, y in zip(d, w)]
+        height[i] = z
+    with mp.workdps(30):
+        _, e1, e2, _ = _mp_frame(support)
+        e1f, e2f = [float(x) for x in e1], [float(x) for x in e2]
+    az = {}
+    for i in set(canon):
+        r = [float(x) for x in radial[i]]
+        raw = math.atan2(sum(x * y for x, y in zip(r, e2f)), sum(x * y for x, y in zip(r, e1f)))
+        az[i] = raw + 2 * math.pi * round((float(mesh.chart[i][0]) - raw) / (2 * math.pi))
+    tris = [[canon[i] for i in t] for t in mesh.triangles.tolist()]
+    edges = sorted({tuple(sorted((t[a], t[(a + 1) % 3]))) for t in tris for a in range(3) if t[a] != t[(a + 1) % 3]})
+    margin = 1e-9
+
+    def box(ids):
+        us, vs = [az[i] for i in ids], [float(height[i]) for i in ids]
+        return (min(us) - margin * (1 + abs(min(us))), max(us) + margin * (1 + abs(max(us))),
+                min(vs) - margin * (1 + abs(min(vs))), max(vs) + margin * (1 + abs(max(vs))))
+    hits = []
+    for a, b in edges:
+        assert abs(az[a] - az[b]) < math.pi / 2, "oracle precondition: an edge spans under pi / 2"
+
+    def cross(i, j):
+        return _exact_cross2(radial[i], radial[j], w)
+
+    def same_ray_at(p, q):                            # radial vectors at one height: same azimuth
+        return _exact_cross2(p, q, w) == 0 and sum(x * y for x, y in zip(p, q)) > 0
+
+    def at_height(a, b, h):
+        """The radial vector of segment ab at height h (``height[a] != height[b]``)."""
+        s = (h - height[a]) / (height[b] - height[a])
+        return [x + s * (y - x) for x, y in zip(radial[a], radial[b])]
+
+    def in_angle(a, b, p):                            # radial p within the azimuth range of a..b
+        lo, hi = (radial[a], radial[b]) if cross(a, b) >= 0 else (radial[b], radial[a])
+        return _exact_cross2(lo, p, w) >= 0 and _exact_cross2(p, hi, w) >= 0
+
+    def edges_meet(e, f):
+        """The P-images of mesh edges e and f meet anywhere except at a shared vertex."""
+        shared = set(e) & set(f)
+        (a, b), (c, d) = e, f
+        if shared:
+            s = shared.pop()
+            a, b = (s, a if b == s else b)
+            c, d = (s, c if d == s else d)
+            ha, hb, hd = height[a], height[b], height[d]
+            if hb == ha and hd == ha:                 # both horizontal from s: same azimuth side?
+                return _sign(cross(a, b)) * _sign(cross(a, d)) >= 0
+            if hb == ha or hd == ha:                  # one horizontal: meets again only if it collapses
+                return cross(a, b if hb == ha else d) == 0
+            if (hb > ha) != (hd > ha):
+                return False
+            top = min(hb, hd) if hb > ha else max(hb, hd)
+            # cross2 of the two radial vectors at height h, divided by (h - ha): linear in h
+            g0 = _exact_cross2(at_height(a, b, top), at_height(a, d, top), w)
+            mid = (ha + top) / 2
+            g1 = _exact_cross2(at_height(a, b, mid), at_height(a, d, mid), w)
+            # f(h) = (h - ha) g(h), g linear: g(top) = f(top) / (top - ha), g(mid) = f(mid) / (mid - ha)
+            gt, gm = g0 / (top - ha), g1 / (mid - ha)
+            gs = 2 * gm - gt                          # g at ha (linear through mid and top)
+            return gt == 0 or (gs != 0 and _sign(gt) != _sign(gs))
+        hab, hcd = (height[a], height[b]), (height[c], height[d])
+        if hab[0] == hab[1] and hcd[0] == hcd[1]:
+            if hab[0] != hcd[0]:
+                return False
+            return in_angle(a, b, radial[c]) or in_angle(a, b, radial[d]) or in_angle(c, d, radial[a])
+        if hab[0] == hab[1] or hcd[0] == hcd[1]:
+            (a, b), (c, d) = ((a, b), (c, d)) if hab[0] == hab[1] else ((c, d), (a, b))
+            h = height[a]
+            if not min(height[c], height[d]) <= h <= max(height[c], height[d]):
+                return False
+            return in_angle(a, b, at_height(c, d, h))
+        lo = max(min(hab), min(hcd))
+        hi = min(max(hab), max(hcd))
+        if lo > hi:
+            return False
+
+        def f(h):
+            return _exact_cross2(at_height(a, b, h), at_height(c, d, h), w)
+        # f is a quadratic in h: values at lo, hi and the midpoint fix it; a root in [lo, hi]
+        if lo == hi:
+            return f(lo) == 0
+        fl, fh, fm = f(lo), f(hi), f((lo + hi) / 2)
+        if fl == 0 or fh == 0 or _sign(fl) != _sign(fh):
+            return True
+        c2 = 2 * (fl + fh - 2 * fm) / (hi - lo) ** 2          # f = c2 x^2 + c1 x + fl, x = h - lo
+        c1 = (fh - fl) / (hi - lo) - c2 * (hi - lo)
+        if c2 != 0:
+            x = -c1 / (2 * c2)
+            if 0 < x < hi - lo:
+                value = fl + x * (c1 + c2 * x)
+                return value == 0 or _sign(value) != _sign(fl)
+        return False
+
+    boxes = {e: box(e) for e in edges}
+    ordered = sorted(edges, key=lambda e: boxes[e][0])
+    for n_, e in enumerate(ordered):
+        be = boxes[e]
+        for k_ in range(n_ + 1, len(ordered)):
+            f = ordered[k_]
+            bf = boxes[f]
+            if bf[0] > be[1]:
+                break
+            if bf[2] <= be[3] and be[2] <= bf[3] and edges_meet(e, f):
+                hits.append(("edges meet", e, f))
+    # vertex strictly inside another triangle's P-image: the fibre ray through it meets the interior
+    # (the vertices sorted by azimuth: only those within the triangle's box are tested)
+    verts = sorted(set(canon), key=lambda i: az[i])
+    keys = [az[i] for i in verts]
+    for t in tris:
+        bt = box(t)
+        pa, pb, pc = ([r + height[i] / ww * x for r, x in zip(radial[i], w)] for i in t)
+        n = _mp_cross([y - x for x, y in zip(pa, pb)], [y - x for x, y in zip(pa, pc)])
+        for v in verts[bisect.bisect_left(keys, bt[0]):bisect.bisect_right(keys, bt[1])]:
+            if v in t or not bt[2] <= float(height[v]) <= bt[3]:
+                continue
+            base = [height[v] / ww * x for x in w]
+            ray = radial[v]
+            denominator = sum(x * y for x, y in zip(n, ray))
+            if denominator == 0:
+                continue
+            lam = sum(x * (y - z) for x, y, z in zip(n, pa, base)) / denominator
+            if lam <= 0:
+                continue
+            y = [z + lam * r for z, r in zip(base, ray)]
+            signs = [sum(x * q for x, q in zip(n, _mp_cross([q - p for p, q in zip(u0, u1)],
+                                                             [q - p for p, q in zip(u0, y)])))
+                     for u0, u1 in ((pa, pb), (pb, pc), (pc, pa))]
+            if all(s > 0 for s in signs):
+                hits.append(("vertex inside", v, t))
+    # every triangle's P-image positively oriented: n_N2 . radial(t) over its P-azimuth range (the
+    # vertices' azimuths at 50 digits, unwrapped onto the float values' sheet)
+    with mp.workdps(50):
+        _, e1, e2, _ = _mp_frame(support)
+        exact_az = {}
+        for i in set(canon):
+            r = [mp.mpf(x.numerator) / x.denominator for x in radial[i]]
+            raw = mp.atan2(sum(x * y for x, y in zip(r, e2)), sum(x * y for x, y in zip(r, e1)))
+            exact_az[i] = raw + 2 * mp.pi * round((az[i] - float(raw)) / (2 * math.pi))
+        for t in mesh.triangles.tolist():
+            p, q, s = ([mp.mpf(float(x)) for x in mesh.points[i]] for i in t)
+            nn = _mp_cross([y - x for x, y in zip(p, q)], [y - x for x, y in zip(p, s)])
+            pc = mesh.sense * sum(x * y for x, y in zip(nn, e1))
+            qc = mesh.sense * sum(x * y for x, y in zip(nn, e2))
+            ths = [exact_az[canon[i]] for i in t]
+            if not _footprint_minimum(pc, qc, mp.mpf(0), min(ths), max(ths)) > 0:
+                hits.append(("projection folds", t))
+    return hits
+
+
+def _sign(x):
+    return (x > 0) - (x < 0)
+
+
+def _check_no_overlap(support, mesh):
+    hits = _projection_overlaps(support, mesh)
+    assert not hits, ("lifted triangles overlap (P-image)", hits[:5])
 
 
 def _check_exempt(n, minimum, k, corners, mesh):
