@@ -1474,3 +1474,39 @@ A parametrised test feeds `face_display_mesh` each base field of each support as
 `np.float32` and `np.float64` (the mesh is bit-identical to the float input's) and as huge int, `2**201`,
 string, `None`, complex, ragged, mixed, short, NaN, infinity and object (a typed `OUT_OF_DOMAIN`, never a raw
 exception).
+
+### Codex round 8 (R8): the lift runs only for exact support types with exact float fields (option A)
+
+`tests/test_display_tessellation_lift_n3r8.py` holds the reproductions (`n3r8-old-run.txt`).
+
+**H1 (a subclass `__copy__` swapped the certified plane: bound 1.8e-14 against a true deviation of 0.005), M1 (a raw
+`TypeError` from the copy step), M2 (N1 read the unnormalised support and raised a raw `TypeError` on `Fraction` /
+`longdouble` fields) and L1 (the broad `TypeError` catch reported a changing support read as `TRIM_INVALID`).** One
+class: the lift read and converted attributes of a caller object that can answer differently each time. Contract
+(owner decision, option A, recorded here and in the CHANGELOG):
+
+- **A1.** The lift runs only when `type(support)` is exactly `Plane`, `Cylinder` or `Cone`. A subclass (or any
+  other type) is `SUPPORT_UNSUPPORTED` (the code N1 already uses for an unsupported support; no new code), so
+  ANYfem keeps its old route. The same test applies to the supports of the faces beside the face's edges, which N1
+  also reads (the refusal names that face).
+- **A2.** `_snapshot` reads each declared field once with `object.__getattribute__` (and a cylinder's or cone's
+  derived `_circumferential`) into a private object of the same exact class. Each value must already be a `float`
+  (exact type; this is what the constructors store: `float(...)` scalars) or a `numpy.ndarray` of dtype float64
+  and shape `(3,)` (`_vector3`); else `OUT_OF_DOMAIN` with fixed text naming the field. No conversion.
+- **A3.** This runs before N1 or any other code reads the support for the face. For exact types with such
+  fields N1's reads and the snapshot's are the same objects, so N1 and the lift see the same numbers and N1 never
+  meets a field that raises. The domain checks, guards and the lift use only the snapshot.
+- **A4.** `_normalised_support` and its `copy.copy` are removed; the lift's handler is again
+  `(ArithmeticError, ValueError)`: with exact float fields no `TypeError` can arise from the support, and a stray
+  one is a defect to see, not a refusal to mislabel.
+- **A5.** Hostile supports (`__copy__`, `__getattribute__`, properties overridden on a subclass, private writes
+  after construction) are outside the contract, as in the solver contract; the exact-type rule is what closes the
+  class. **Changed result:** int, `Fraction`, NumPy-scalar, `float32` and list fields, converted and accepted in
+  round 7, are `OUT_OF_DOMAIN` again; subclasses accepted in round 7 are `SUPPORT_UNSUPPORTED`. Ordinarily built
+  supports are unchanged.
+
+Class audit: every read of a support attribute outside `_snapshot`: `_support_parameters`, `_upper_parameters`,
+`_guarded_fields`, `_check_magnitudes` (lines in `_lift` after the snapshot, given the snapshot), `_PlaneChart.__init__`
+(origin, u, v), `_CylinderChart` (axis, radius), the cone chart (axis, radii, height) and the apex list: each is
+reached only from `_lift_plane`/`_lift_cylinder`/`_lift_cone` with the snapshot. N1's reads (`_check_support_domain`
+gets the snapshot; edge sampling reads the model's own, identical, objects after the snapshot check).

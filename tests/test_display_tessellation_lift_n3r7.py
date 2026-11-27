@@ -80,9 +80,9 @@ class AnnotatedPlane(Plane):
 @pytest.mark.parametrize("extra", [2 ** 201, [2. ** 201, "label"], [[0], [1, 2]], "label", None, 5, 2 ** 5000,
                                    1j, {"a": 1}])
 def test_m1_l1_subclass_extra_attribute_never_changes_the_outcome(extra):
-    plain = _run("plane")
+    # r8 (owner decision, option A): a subclass is no longer lifted; its extra attribute never matters
     s = AnnotatedPlane((0, 0, 0), (1, 0, 0), (0, 1, 0), extra)
-    assert _run("plane", s) == plain
+    assert _run("plane", s)[:2] == ("refused", "SUPPORT_UNSUPPORTED")
 
 
 # ---- G2: every guarded base field converts or is refused, never a raw exception
@@ -131,9 +131,11 @@ def _cases():
 
 @pytest.mark.parametrize("kind,name,label", list(_cases()))
 def test_g2_equivalent_numeric_types_give_the_float_mesh(kind, name, label):
-    base = _run(kind)
+    """r8 (owner decision, option A): int / Fraction / NumPy-scalar / list fields, accepted in r7, are
+    refused again: only exact ``float`` and float64 ``ndarray`` fields are in the lift's domain."""
     value = _convert(getattr(_BASE[kind], name), _EQUIVALENT[label])
-    assert _run(kind, _with(kind, name, value)) == base
+    r = _run(kind, _with(kind, name, value))
+    assert r[:2] == ("refused", "OUT_OF_DOMAIN")
 
 
 def _bad_values(name, value):

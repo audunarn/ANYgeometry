@@ -81,6 +81,13 @@ All notable user-visible changes to ANYgeometry are documented here.
   bit-identity sets vs 75c52fc (planar, cylinder and cone fuzz and every corpus face at both steps; tripod skins and the
   400-face cylinder accepted). Timing vs 5c4d38c (loaded PC, totals): 400-face cylinder +5 / +6 %, polygon400 +12 / +2
   %, tripod +10 / +10 % (round 4: +13 / +16, +19 / +8, +8 / +13 %).
+- N3 Codex round 8 (owner decision, option A): the lift runs only for a support of exact type `Plane`, `Cylinder` or
+  `Cone` (a subclass is `SUPPORT_UNSUPPORTED`, also for the supports beside the face's edges, which N1 reads), whose
+  declared fields (and a cylinder's or cone's `_circumferential`) are read once and are exactly `float` or a
+  float64 array of shape (3,), else `OUT_OF_DOMAIN`; no conversion (Codex r8 H1 copy hook certified another plane,
+  M1/M2 raw `TypeError`, L1 mislabelled `TRIM_INVALID`). The r7 normalisation and the `TypeError` catch are
+  removed. Changed results vs 06db3c5: int, `Fraction`, NumPy-scalar and list fields (accepted in r7) are
+  `OUT_OF_DOMAIN`; subclasses are `SUPPORT_UNSUPPORTED`; ordinarily built supports unchanged.
 - N3 Codex round 7 (owner standing approval, recommended option): the magnitude guard covers exactly the declared
   fields of the base support class (Plane, Cylinder, Cone), not every attribute of the instance (Codex r7 M1/L1: a
   ragged stored attribute of a subclass raised a raw `ValueError`; `2**201` or a number beside a string bypassed

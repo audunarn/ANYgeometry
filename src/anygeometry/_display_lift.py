@@ -191,10 +191,8 @@ T_face (:func:`_check_derived`).  P1: the round-4 certificate on small faces run
 """
 from __future__ import annotations
 
-import copy
 import dataclasses
 import math
-import numbers
 from fractions import Fraction
 
 import numpy as np
@@ -454,76 +452,76 @@ def _support_parameters(support):
     return [*support.origin, *support.axis, support.radius_start, support.radius_end, support.height]
 
 
-def _base_class(support):
-    """The base support class (Plane, Cylinder or Cone) whose declared fields the lift reads."""
-    for base in (Plane, Cylinder, Cone):
-        if isinstance(support, base):
-            return base
-    raise TypeError("not a plane, cylinder or cone")                       # unreachable: checked by _lift
-
-
 def _guarded_fields(support):
-    """The names of the support parameters the lift reads: the declared (dataclass) fields of the BASE
-    class, in order (Codex N3 r7 G1).  A subclass's extra attributes are never read by the lift and are
-    outside the domain contract; a new base field is guarded automatically (pinned by a test)."""
-    return [f.name for f in dataclasses.fields(_base_class(support))]
+    """The names of the support parameters the lift reads: the declared (dataclass) fields of its class
+    (Codex N3 r7 G1; the class is exactly Plane, Cylinder or Cone since r8, see :func:`_snapshot`).  A new
+    base field is guarded automatically (pinned by a test)."""
+    return [f.name for f in dataclasses.fields(type(support))]
 
 
-def _field_shapes(support):
-    """``{name: expected shape}``: ``(3,)`` for a field annotated ``np.ndarray``, else ``()``."""
-    return {f.name: ((3,) if "ndarray" in str(f.type) else ()) for f in dataclasses.fields(_base_class(support))}
+_PRIVATE_FIELDS = {Plane: (), Cylinder: ("_circumferential",), Cone: ("_circumferential",)}
 
 
-def _real_number(x) -> float:
-    if isinstance(x, (bool, np.bool_)) or not isinstance(x, numbers.Real):
-        raise TypeError("not a real number")
-    return float(x)
+def _exact_float_field(value, array) -> bool:
+    """``float`` (exact type) or a float64 ``numpy.ndarray`` (exact type) of shape ``(3,)``: what the
+    Plane, Cylinder and Cone constructors store for every ordinary input (``float(...)`` scalars,
+    ``_vector3`` arrays).  No conversion: ``int``, ``Fraction``, NumPy scalars and ``float32`` arrays are
+    not accepted (Codex N3 r8, owner decision, option A)."""
+    if array:
+        return type(value) is np.ndarray and value.dtype == np.float64 and value.shape == (3,)
+    return type(value) is float
 
 
-def _float_field(value, shape):
-    """``value`` as a binary64 array of ``shape``, or ``None`` if it is not a real number (array) of
-    that shape: Python int, Fraction, NumPy integer and float scalars and sequences of them convert; an
-    int too large for a float, a ragged or string-bearing sequence, ``None``, a complex or any object
-    does not (never a raw exception, Codex N3 r7 G2)."""
+def _snapshot(face_id, support):
+    """A private copy of the support's declared fields, read ONCE (Codex N3 r8, owner decision A1-A3).
+
+    The lift runs only for a support of EXACT type Plane, Cylinder or Cone (any subclass, with its
+    overridden properties, ``__getattribute__`` or ``__copy__``, is ``SUPPORT_UNSUPPORTED``: the caller
+    keeps its own route).  Each declared field (and the derived ``_circumferential`` of a cylinder or
+    cone) is read with ``object.__getattribute__`` and must already be a ``float`` or a float64 array
+    of shape (3,), else ``OUT_OF_DOMAIN`` with fixed text.  The check runs before N1 reads the support,
+    so N1 never meets a field that makes it raise a raw exception; for exact types with such fields N1's
+    reads return the same objects as the snapshot.  The lift, the domain checks and the guards use only
+    the returned object.  Hostile supports (private writes after construction, hooks on a subclass) are
+    outside the contract, as in the solver contract."""
+    cls = type(support)
+    if cls not in _PRIVATE_FIELDS:
+        raise _refuse("SUPPORT_UNSUPPORTED", face_id, "its support is not exactly a plane, cylinder or cone")
+    snap = object.__new__(cls)
+    for field in dataclasses.fields(cls):
+        value = _read(support, field.name)
+        if not _exact_float_field(value, "ndarray" in str(field.type)):
+            raise dt.DisplayDomainRefused(f"face {dt._id_text(face_id)}: support field {field.name!r} is not a "
+                                          f"float (or a float64 vector of three): the lift's domain")
+        object.__setattr__(snap, field.name, value)
+    for name in _PRIVATE_FIELDS[cls]:
+        value = _read(support, name)
+        if not _exact_float_field(value, True):
+            raise dt.DisplayDomainRefused(f"face {dt._id_text(face_id)}: support field {name!r} is not a "
+                                          f"float64 vector of three: the lift's domain")
+        object.__setattr__(snap, name, value)
+    return snap
+
+
+def _read(support, name):
     try:
-        if isinstance(value, (str, bytes, bytearray)):
-            return None
-        array = np.asarray(value)                                           # ragged: ValueError
-        if array.dtype.kind in "iuf":
-            array = array.astype(np.float64)
-        elif array.dtype.kind == "O":
-            array = np.array([_real_number(x) for x in array.ravel().tolist()], dtype=np.float64).reshape(array.shape)
-        else:
-            return None
-    except Exception:                                                       # untrusted caller object: fail closed
+        return object.__getattribute__(support, name)
+    except AttributeError:
         return None
-    return array if array.shape == shape else None
 
 
-def _normalised_support(face_id, support):
-    """The support with every guarded field a binary64 array or float (Codex N3 r7 G2), else
-    ``OUT_OF_DOMAIN`` with fixed text.  A support whose fields are already ``float64`` arrays or
-    ``float`` scalars (every ordinary one) is returned as is; otherwise a shallow copy carries the
-    converted fields, so each later conversion (here, in N1 and in the lift) sees plain floats."""
-    changes = {}
-    for name, shape in _field_shapes(support).items():
-        value = getattr(support, name, None)
-        if shape and type(value) is np.ndarray and value.dtype == np.float64 and value.shape == shape:
-            continue
-        if not shape and type(value) is float:
-            continue
-        converted = _float_field(value, shape)
-        if converted is None:
-            raise dt.DisplayDomainRefused(f"face {dt._id_text(face_id)}: support field {name!r} is not a real "
-                                          f"number (or vector of three) that converts to binary64 (the lift's "
-                                          f"domain)")
-        changes[name] = converted if shape else float(converted)
-    if not changes:
-        return support
-    clone = copy.copy(support)
-    for name, value in changes.items():
-        object.__setattr__(clone, name, value)
-    return clone
+def _check_incident_supports(model, loops):
+    """N1 also reads the supports of the faces beside the face's edges: the same exact-type and field
+    check applies to each (a refusal names the neighbour's face id)."""
+    seen = set()
+    for loop in loops:
+        for use in loop:
+            for other in model.faces_using_edge(use.edge):
+                support = model.faces[other].surface
+                if other in seen or not isinstance(support, (Plane, Cylinder, Cone)):
+                    continue                                                # N1 refuses any other support
+                seen.add(other)
+                _snapshot(other, support)
 
 
 def _upper_parameters(support):
@@ -2941,7 +2939,7 @@ def _lift(model, face_id, tol, *, _extra_x=None):
             raise _refuse("SUPPORT_UNSUPPORTED", face_id, "the face has an explicit parameterization")
         if not isinstance(support, (Plane, Cylinder, Cone)):
             raise _refuse("SUPPORT_UNSUPPORTED", face_id, "its support is not a plane, cylinder or cone")
-        support = _normalised_support(face_id, support)
+        support = _snapshot(face_id, support)
         dt._check_support_domain(support)
         extra = _check_extra(_extra_x)
         # budgets before any scan proportional to the trim (Codex N3 r2 L3): N2's ring cap (before
@@ -2956,6 +2954,7 @@ def _lift(model, face_id, tol, *, _extra_x=None):
             raise _slab._too_complex(f"at least {dt._id_text(coedges)} ring points "
                                      f"(MAX_SLAB_RING_POINTS = {_slab.MAX_SLAB_RING_POINTS})")
         _check_loops(face_id, loops)
+        _check_incident_supports(model, loops)
         budget = [0]
         rings = [_ring(model, face_id, loop, tol, budget) for loop in loops]
         _check_magnitudes(face_id, support, rings)
@@ -2967,5 +2966,5 @@ def _lift(model, face_id, tol, *, _extra_x=None):
             return _lift_cone(model, face_id, tol, support, rings, extra)
         except dt.DisplayTrimRefused:
             raise
-        except (ArithmeticError, ValueError, TypeError) as error:      # no raw arithmetic error escapes
+        except (ArithmeticError, ValueError) as error:      # no raw arithmetic error escapes
             raise _invalid(face_id, _ARITHMETIC) from error
