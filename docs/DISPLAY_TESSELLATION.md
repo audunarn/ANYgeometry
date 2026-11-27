@@ -420,13 +420,13 @@ keeps `__name__`, `numbers`, a formatted dtype and exception text out of both mo
 | `SUPPORT_UNSUPPORTED` | an incident face's support is not a plane, cylinder or cone, or the face has an explicit parameterization |
 | `EDGE_UNSUPPORTED` | the curve is not a line, circle or ellipse; degenerate frame or projection; support azimuth not monotone along the edge or reaching the axis (a line crossing it); unresolvable sag (including a sag rounding allowance above 2 % of the sag allowance); a vertex farther from its curve than the sag allowance; more than 4096 intervals (each division, or their sum); lost precision |
 | `OUT_OF_DOMAIN` | outside the declared numeric domain (`DisplayDomainRefused`), including an angle rounding allowance above 2 % of `tol.angle` |
-| `TRIM_INVALID`, `TRIM_WINDS_SUPPORT` | reserved for face trims (not raised by edge sampling) |
+| `TRIM_INVALID`, `TRIM_WINDS_SUPPORT` | face trims: raised by `face_display_mesh` (N3, "Face lift (N3)" below), not by edge sampling |
 
 ## Trim ring triangulation (`anygeometry._slab_triangulation`, private, N2)
 
 `triangulate_rings(rings, extra_x=None)` triangulates the region of `rings[0]` minus `rings[1:]`
 (each ring closed implicitly; ring orientation is free) in pure NumPy, without Shapely. It is not
-wired into any public display mesh yet (N3/N4).
+wired into a public display mesh by `face_display_mesh` (N3, below).
 
 **Input contract (owner decision, N2 round 1, the recommended option): simple rings.** The outer
 ring and every hole are simple polygons: no proper crossing, no self-touch, no zero-width retrace
@@ -707,3 +707,840 @@ oracle failures, 2957 `TRIM_INVALID`, 4 `OUT_OF_DOMAIN` area floor, 0 raw except
 refusal codes and messages included. Timing (`n2r4_bench.py`, best of three alternating passes,
 1ab837b / round 5): 2.53 / 2.57 ms, 0.475 / 0.473 ms, 8.9 / 8.2 ms; 49 / 50 us, 89 / 90 us, 84 / 83
 us, 223 / 223 us (unchanged within the loaded PC's noise; only refusal text changed).
+
+## Face lift (N3)
+
+`face_display_mesh(model, face_id, tol) -> FaceDisplayMesh` (public in
+`anygeometry.display_tessellation`, not re-exported from `anygeometry`; implementation in the private
+`anygeometry._display_lift`) returns a certified triangle mesh of one face whose support is a
+`Plane`, `Cylinder` or `Cone` and whose loops are edges N1 draws (lines, circles, ellipses), or a
+typed `DisplayTrimRefused`, never a partial mesh (owner decisions 2026-11-26 on SPEC-N3 Q1-Q9;
+slices N3a plane, N3b cylinder, N3c cone). Same trust model as N1 and N2: exact argument types,
+the module's arithmetic under `np.errstate(all="ignore")` with explicit guards, model calls through
+N1, no raw arithmetic error escapes, and the result does not depend on the caller's `np.seterr`.
+Nothing in it runs in a GUI thread by itself.
+
+**Steps.** (1) Support check. (2) Rings: the N1 samples of each coedge (reversed for a reversed
+coedge, last point dropped); consecutive coedges must meet bit for bit. (3) Chart of every ring
+point: on a plane its coordinates in an orthonormal frame of the plane; on a cylinder or cone
+`(theta, h)` about the module's own axis frame (`_axis_frame`), theta unwrapped along each ring
+(N1 bounds every azimuth step by the angle plus 2 %), holes shifted by multiples of 2 pi onto the
+outer ring's sheet. (4) Seam, winding and apex refusals. (5) Boundary-chord certificate against
+T_face. (6)-(7) N2 (`triangulate_rings`), refined by slab bisection where needed (cylinder,
+cone). (8) Lift by index: ring vertices are the N1 points; a cut point (a point N2 makes on a ring
+chord) is ON the 3D N1 chord, `A + f (B - A)` (`cut_fraction` is provenance only: no claim is
+derived from it). (9) Combinatorial, orientation and deviation certificates.
+
+**`FaceDisplayMesh`.** `points` (n, 3): first the ring vertices, the N1 `EdgeSamples` points bit
+for bit (outer loop, then each hole), then the cut points; `triangles` (m, 3) int64,
+counter-clockwise about the face normal `sense x` the support normal; `chart` (n, 2) the chart
+points; `ring_vertex_count`; `source` (n, 2) `(edge id, interval index)` of the N1 chord each point
+lies on; `sense` the sign of the outer ring's exact chart area; `face_tolerance` = T_face;
+`deviation_bound` (certified, `<= face_tolerance`); `trim_sag_bound`; `degenerate_count` (lifted
+triangles with an exactly zero 3D normal, dropped from `triangles`: R3 C3).
+
+### Contract
+
+- **Domain and map (Q3).** The domain is the closure of the positive-area interior of the chart
+  polygon of the N1 samples (as N2 defines it); the map is the index-wise lift, linear per
+  triangle. Ring vertices are N1's points bit for bit; cut points lie on N1 chords to rounding.
+- **Coverage (Q2), certified combinatorially and exactly:** (i) the index-to-chart map is
+  injective; (ii) every directed triangle edge occurs once, and an edge without its reverse lies on
+  one ring chord; (iii) those boundary edges are exactly the chain of every ring (its vertices with
+  each chord's cut points in order, directed so the region is on the left); (iv) every chart
+  triangle is strictly counter-clockwise (Shewchuk's filter, then rationals). With all triangles
+  positive, the 2-chain's boundary is the rings' chain, so every point off the edges is covered
+  exactly by its winding number: a conforming, non-overlapping covering of the chart region.
+  The certificate is about the chart; it carries over to the support only where the chart map is
+  injective (R2 H2, "Injectivity" below): on a cylinder or cone the unwrapped azimuth extent of
+  the rings must be certifiably below 2 pi (`TRIM_WINDS_SUPPORT` otherwise); a plane's affine
+  chart is injective by its non-degenerate frame (sine at least 1e-12, else `OUT_OF_DOMAIN`).
+- **Paired deviation (Q4).** A mesh point at barycentric weights `w` of a triangle corresponds to
+  the support point at the same weights of the chart vertices (parametric correspondence, not the
+  radial distance: on the r6 frustum the radial distance 0.2929 passes a 0.30 limit, the paired
+  0.3800 does not). `deviation_bound` bounds it over every triangle in closed form, never sampled.
+- **T_face (Q5, owner decision).** `tol.sag` if given; else on a plane
+  `model.tolerance.surface_residual`; else `r_max (tol.angle + a)^2 / 8 + surface_residual` on a
+  cylinder (`r_max` its radius) or a cone (`r_max` the larger of its two radii), `a` the largest N1
+  `allowance.angle` of the face's edges. Vertex offsets count toward it. The default admits every
+  N1 circle chord on its own support (Taylor bound `r dT^2 / 8`, `dT <= angle + a`) as long as the
+  rounding allowance `A_face` stays within the slack (see the large-radius note).
+- **Analytic trim (Q6): approximated, not covered.** The mesh covers the polygon of the N1 chords,
+  not the analytic trim region. `trim_sag_bound` certifies the largest distance of the drawn
+  boundary chords from the analytic curves (N1's exact chord sag, its rounding and the vertex
+  offsets), plus every boundary point N3 creates: the cut points' own rounding (R1 M2); the D1
+  identifications move no lifted point (R3 C1: bitwise equal), so they add nothing; always reported, enforced (`EDGE_UNSUPPORTED`)
+  only when `tol.sag` is given, as `sag (1 + 64 eps)` plus the offsets N1 treats as rounding
+  (decision D3) on N1's chords (N3's own rounding terms are reported on top). A plane with a circular
+  hole is accepted at the default tolerance with `trim_sag_bound >= r (1 - cos(angle / 2))`.
+- **T-vertices (Q8): crack-free to rounding, not vertex-shared.** A cut point on a boundary chord is
+  not inserted into the neighbour's samples; it lies on the shared 3D N1 chord (to the rounding of
+  `A + f (B - A)`, at most `2 eps (|A_i| + |B_i|)` per coordinate; `4 eps |(|A| + |B|)|` is counted),
+  so neighbouring faces meet without cracks above rounding, with T-vertices. N1 samples are never
+  moved and no other face is edited. **Identifications are exact (R3 C1, owner decision
+  2026-11-27, replacing R1/R2 H1):** a D1 merge identifies two cut points only when their lifted
+  3D points are bitwise equal, and a chain edge cancels only when both of its lifted ends are
+  bitwise equal (`L = 0` exactly); otherwise `TRIM_INVALID`. No allowance enters, so the mesh
+  boundary is the lifted chain of the ring chords point for point: no identification opens a gap.
+- **Orientation (Q7), no margin (R3 C3, owner decision 2026-11-27).** Every published triangle is
+  CERTIFIABLY positively oriented against `sense x` the support normal over its WHOLE chart
+  footprint (not at its centroid: codex-n2r8's 2e-4-sweep fixture passes the centroid test and
+  folds elsewhere). A float filter certifies most triangles (its bound is the filter's own error
+  budget, never a margin that admits anything: plane `(16 eps + 2 alpha) |d1| |d2|`, cylinder
+  `40 eps |d1| |d2|`, cone `40 eps (1 + |k|) |d1| |d2|`, about three times the derived error, which
+  assumes libm's cosine and sine within a few ulps). Every triangle it cannot certify is decided
+  from its EXACT normal (integers over the stored points' common power-of-two scale; R1 M1): on
+  a plane a second, tight filter and then exactly against `u x v` (exact); on a cylinder or cone
+  by an ENCLOSURE (below, "Exact fallback on curved supports"): kept only if certifiably positive.
+  A triangle whose exact normal is zero (zero area) is DROPPED from `triangles` and counted in
+  `degenerate_count`; anything else (negative or undecided) is a fold (`TRIM_INVALID`), whatever
+  its width or world position. **Dropping keeps the certificates:** the three lifted points of a
+  zero-normal triangle are collinear (or coincide), so its point set is its longest edge, which
+  any two of its edges cover; it is dropped only if that set provably lies in the kept
+  triangles: an edge is covered when its reverse is in a kept triangle or in a dropped triangle
+  already shown covered, a dropped triangle when two of its edges, or one longest edge (exact
+  squared lengths), are covered, iterated to a fixpoint (an ulp slab gives a strip of zero-area
+  triangles along one chord); else `TRIM_INVALID` ("a zero-area lifted triangle is not covered by
+  the triangles kept beside it"). Then the kept triangles contain every dropped one as point
+  sets, so the lifted surface and the lifted boundary chain are unchanged as sets (a dropped
+  chain edge lies in the kept mesh: no gap at a shared trim); the
+  chart covering (Q2) is certified on the full chart mesh, and `deviation_bound` is taken over all
+  of it, so the support over a dropped triangle's footprint is within `deviation_bound` of the kept
+  mesh. The published mesh then has unpaired edges along each dropped triangle (overlapping in
+  3D, zero width).
+
+### Bounds per support
+
+`eps = 2^-52`, `FE = _FRAME_ERROR` (the module frame's distance from an exactly orthonormal one).
+Common lemma: for the exact chart map `S*`, a mesh point `x = sum W_j X_j` with chart
+`c = sum W_j c_j + kappa` (`W` convex weights over the ring vertices `j` that the triangle's
+vertices stand for: a cut at fraction `f` of chord `AB` stands for `A` and `B` with weights
+`1 - f`, `f`; `kappa` the computed distance of a cut's chart point from that interpolation),
+
+    |x - S*(c)| <= max_j |X_j - S*(c_j)| + |sum W_j S*(c_j) - S*(cbar)| + Lip |kappa| + 16 eps max|X|,
+
+and `|X_j - S*(c_j)| <= delta_j (1 + 8 eps) + A_face` with `delta_j = |X_j - S(c_j)|` computed.
+
+**Plane (decision D2).** The chart is measured through an exactly orthonormal chart: with the
+module's frame `e1 = u / |u|`, `n = (u x v) / |u x v|`, `e2 = n x e1` and `S*` built on the exact
+frame, an isometric affine chart, `|sum w_i (X_i - S*(c_i))| <= max_i |X_i - S*(c_i)|` (no
+curvature term). `A_face = 16 eps (|o| + max|X| + H) + 2 alpha max|c|`, `alpha = 8 eps / s + 16 eps`
+(the frame's tilt; `s` the sine between `u` and `v`, `s < 1e-12` is `OUT_OF_DOMAIN`), `H` the
+largest coordinate extent. `deviation_bound = max over triangles of max_i delta_i (1 + 8 eps) +
+A_face`. Orientation: `nT . (sense n) > (16 eps + 2 alpha) |d1| |d2|`, once per triangle.
+Where that bound exceeds `T_face` at a point (R1 M3: `|o|` and `max|X|` are world magnitudes, so
+an exactly planar triangle on `z = 2e6` failed `T_face = 1e-8` by rounding alone), the point's
+bound is the smaller of it and the origin-relative bound `delta_loc (1 + 8 eps) + A_loc`,
+`delta_loc = |w - c_x e1 - c_y e2|`, `w = X - o` (rounded by half an ulp of its own result),
+`A_loc = 16 eps (max|w| + max|c|) + 2 alpha max|c|`; a point still over is decided exactly:
+`D^2 = |w|^2 + |c|^2 - 2 c_x (w.u) / sqrt(u.u) - 2 c_y (w.v') / sqrt(v'.v')` (`v' = v - (v.u /
+u.u) u`, the exactly orthonormal frame) in rationals with both square roots enclosed to `2^-128`,
+`2^-512`, `2^-2048` relative; proven `D <= T_face` accepts (bound `<= T_face`), proven over or
+undecided refuses (`EDGE_UNSUPPORTED` at a ring vertex, `TRIM_INVALID` at a cut). A face the
+first bound accepts is unchanged bit for bit.
+
+**Cylinder.** `S*(theta, h) = o + r c(theta) + h a*`, `c = cos e1* + sin e2*`;
+`A_face = 32 eps (|o| + r + H + max|X|) + 2 FE (r + H)`, `H = max |h|`. `S*_tt = -r c`, every
+other second derivative 0, so the middle term is at most `(r / 2) Var_W(theta)`. By the law of
+total variance `Var_W(theta) = sum_i w_i V_i + Var_w(m_i)`, `V_i = f_i (1 - f_i) (theta_B -
+theta_A)^2` (0 for a ring vertex), `m_i` within `kappa_t` of `theta_i`. The maximum over the
+triangle of `G(w) = sum w_i V_i + Var_w(theta_i)` lies on an edge (`G` depends on `w` through the
+image point `(sum w_i (V_i + theta_i^2), sum w_i theta_i)`; for each second coordinate the largest
+first one lies on the image triangle's boundary), and on the edge `p, q` (`tau = theta_q -
+theta_p`) `G = (1 - l) V_p + l V_q + l (1 - l) tau^2` has the exact maximum `U = max(V_p, V_q) +
+max(tau^2 - |V_q - V_p|, 0)^2 / (4 tau^2)`. Per triangle
+
+    E(T) = [max_j delta_j (1 + 8 eps) + (r / 2) (U (1 + 32 eps) + 8 eps (dT^2 + max V))
+            + A_face + 16 eps max|X| + r k_t + k_h + (r / 2) (2 k_t dT_max + k_t^2)] (1 + 8 eps).
+
+Boundary chords (two ring vertices): `max delta (1 + 8 eps) + r dT^2 / 8 (1 + 8 eps) + A_face <=
+T_face`, else `EDGE_UNSUPPORTED` (a fixed N1 chord cannot be refined inside). Where a chord or a
+triangle exceeds T_face with this bound, the origin-relative variant decides as on a plane (R1, M3
+class): offsets `|(X - o) - S_loc(c)|`, `S_loc = rho c(theta) + h a`, and `A_loc = 32 eps (r + H +
+max|X - o|) + 2 FE (r + H)`, the cuts' `16 eps max|X|` replaced by their chords' `cut_rounding`
+(the same on a cone with `rho_max` and `rho`'s rounding); a face the first bound accepts without
+refinement is unchanged bit for bit. Orientation:
+`n . c(theta) = R cos(theta - phi)`, whose set above a margin `m >= 0` is an arc shorter than pi,
+so on a footprint narrower than pi the minimum exceeds `m` iff both end values do: filtered as
+`sense n . c(theta_end) > 40 eps |d1| |d2|` at both ends (the filter's error bound, about 13 eps
+derived: rounded differences and cross product 2.5, dots 2, frame `sqrt(2) FE` 5.7, cosine, sine
+and sums 2.5; it certifies, never exempts); a footprint of pi or more is refused; the rest by the
+exact enclosure (R3 C3, "Codex round 3").
+
+**Decision E1.** The bound above is SPEC-N3's Taylor/Popoviciu bound taken over the ring vertices
+each cut stands for, with the exact maximum on each triangle edge. It replaces the spec's
+`E(T) = max_i delta_i + r dT^2 / 8`, which counted a cut's chord sag twice (the cut's own offset
+already holds it): 288 of the 2663 tripod triangles exceeded T_face at 7.5 deg with that form, none
+with this one.
+
+**Cone (N3c).** `S*(theta, h) = o + rho(h) c(theta) + h a*`, `rho(h) = r0 + k h`,
+`k = (r1 - r0) / (height |axis|)` (the support's `evaluate` puts `v height axis` at radius
+`(1 - v) r0 + v r1`; `height` may be negative). `A_face = 32 eps (|o| + rho_max + H + max|X|) +
+2 FE (rho_max + H) + 8 eps (|r0| + |k| H)` (the last term the rounding of `rho`, `k` included).
+Since `rho` is linear in `h`, `sum W_j rho_j = rho(hbar)` and exactly
+
+    sum W_j S*(c_j) - S*(cbar) = sum W_j rho_j (c(theta_j) - c(thetabar))
+                               = k Cov_W(theta, h) c'(thetabar) + sum W_j rho_j R_j,   |R_j| <= dt_j^2 / 2,
+
+so the middle term is at most `(1 / 2) sum W_j rho_j dt_j^2 + |k| |Cov_W(theta, h)|` (`rho_j > 0`
+by the apex rule). This is SPEC-N3's `B_cone = rho_max dT^2 / 8 + |k| dT dH / 4` (Cauchy-Schwarz
+and Popoviciu give `|Cov_w| <= dT dH / 4` for a triangle's own vertices), taken in a form that does
+not add a circle chord's variance to the mixed term at a different weight: by the laws of total
+variance and covariance, with each cut's own chord (`V_i`, `C_i = f (1 - f) dtheta dh`, 0 on a
+circle) and the cross term `|k| C_i |m_i - thetabar|` (rho varies along a skew chord),
+
+    middle term <= H(w) = sum_i w_i P_i + sum_{i<j} w_i w_j D_ij,
+    P_i = (rho_i / 2) V_i + |k| C_i (1 + dT + 2 k_t),    D_ij = (rho_T / 2) tau_ij^2 + |k| |tau_ij dh_ij|
+
+(`rho_i` the larger radius of a cut's chord ends, `rho_T` the largest over the triangle; the
+triangle vertices' own variance and covariance are `sum_{i<j} w_i w_j tau_ij^2` and
+`sum_{i<j} w_i w_j tau_ij dh_ij`). The maximum of `H` over the triangle is taken exactly: on each
+edge `max(P_p, P_q) + max(D - |P_q - P_p|, 0)^2 / (4 D)`; where `H` is strictly concave on the
+plane (`D01 > 0`, `det = 4 D01 D02 - (D01 + D02 - D12)^2` above its rounding and above
+`1e-6 (D01 + D02)^2`, so the condition number is at most 4e6) and its critical point lies in the
+triangle (to 1e-3), also the critical value (a concave quadratic's global maximum, an
+upper bound wherever it lies); where it is concave only to rounding, the boundary maximum plus
+`(det + its rounding) / (D01 + D02)` (along the flattest direction the boundary is within that).
+Per triangle
+
+    E(T) = [max_j delta_j (1 + 8 eps) + H_max (1 + 64 eps) + 32 eps (sum D + max P)
+            + ((rho_T / 2)(2 k_t dT_max + k_t^2) + |k| ((k_h dT + k_t dH) / 2 + k_t k_h)) (1 + 8 eps)
+            + A_face + 16 eps max|X| + rho_max k_t + (1 + |k|) k_h] (1 + 8 eps)
+
+(`|dS/dtheta| = rho`, `|dS/dh| = |k c + a| <= 1 + |k|` for the `kappa` shift). Boundary chords:
+`max delta (1 + 8 eps) + (rho dT^2 / 8 + |k| dT dH / 4)(1 + 8 eps) + A_face <= T_face`, else
+`EDGE_UNSUPPORTED`. On the r6 frustum's naive two-triangle mesh `B_cone = 0.3084 + 0.3888 = 0.697`
+bounds the oracle's 0.3800 (the curvature term alone, 0.3084, would not). Orientation:
+`S_theta x S_h = rho (c(theta) - k a)`, so the sign of `f(theta) = sense n . c(theta) - sense k
+n . a = R cos(theta - phi) + level` decides; its minimum over a footprint narrower than pi is at
+an end unless the sinusoid's minimum lies inside, which needs a falling slope at the low end and
+a rising one at the high end; "possibly inside" within the filter bound is taken as inside, and
+then `level - R` must exceed the bound too. Filter bound `40 eps (1 + |k|) |d1| |d2|` (the
+cylinder's budget plus about 17 eps |k|: the level's dot and product, `|k| FE` and the slope's own
+rounding); the rest by the exact enclosure (R3 C3).
+
+**Refinement (decision E3).** Every slab holding a triangle with `E(T) > T_face` gets an N2 extra
+slab line at its middle; N2 runs again and every certificate is re-run on the new mesh, at most
+`_REFINE_ROUNDS = 8` rounds (2^8 sub-slabs per slab). Still failing: `TRIM_INVALID` ("a lifted
+triangle's deviation bound exceeds the face tolerance"); a slab too narrow to bisect likewise; more
+than `MAX_SLAB_INCIDENCES` lines: `OUT_OF_DOMAIN` ("too complex"). Bisection rather than one
+uniform step: as `tau` shrinks the edge maximum falls to `max(P_p, P_q)` as soon as
+`D <= |P_q - P_p|`, so a staggered cut near a chord's middle usually needs one or two halvings. A
+face needing none is N2's mesh itself. On a cone the mixed term needs slabs about
+`4 (T_face - chord sag) / (|k| dH)` wide: the r6 frustum (`k = 0.99`, `dH = 1`) takes 5-8 rounds at
+0.05-0.3 rad and is refused after 8 at 0.02 rad. Test: with `tol.sag` exactly the worst
+boundary-chord bound, 8 rounds then `TRIM_INVALID`.
+
+**Decision E2 (azimuth join).** Chart azimuths closer than their own rounding,
+`16 eps (max(1, |theta|) + reach / r)` (on a cone `r` is the smallest `rho` at the ring points;
+`reach` = `max |P - o|` plus the stored coordinates' representation projected onto the radial
+plane, `sum_i (|P_i| + |o_i|) (|e1_i| + |e2_i|)`, R2 M3; it was the largest world coordinate plus
+the origin's, so an axial translation to 2e6 joined two ring vertices 1e-8 rad apart), are joined
+to the smallest:
+the two ends of a ruling, or a hole's ruling against another ring's vertex, otherwise make
+ulp-wide slabs whose cuts on a long chord stand tangentially off the chart order (a true sliver
+fold, 3D width ~1e-3). The join changes chart values only: every ring vertex still lifts to its N1
+sample bit for bit (tested), the offsets `delta` measure the change, and a join that would make
+two distinct N1 samples one chart point is `TRIM_INVALID` ("two ring points coincide in the
+chart", tested).
+
+**Decision D1 (aligned holes).** Two or more CUT points whose chart points are bitwise equal become
+one mesh vertex before the certificates (the boundary chain is then a 1-chain whose zero-width
+spikes cancel); a chart point shared with a ring vertex stays `TRIM_INVALID`. **R1 H1:** the
+identification must also hold in 3D. Let `d` be the largest 3D distance between a merged cut and
+its kept representative and `L` the total 3D length of the chord pieces whose chain edges cancel
+(a cancelled piece is not on the mesh boundary; every point of it lies within `L` of a node that
+is, a cancelled run along a ring ending at nodes of that ring's remaining chain; a ring whose
+whole chain cancels is `TRIM_INVALID`). R1/R2 bounded the gap by `d + L`, added to
+`trim_sag_bound` and limited to T_face (R1) then `A_face` (R2); R3 found `A_face` itself inflated
+to 15646 by an ill-conditioned plane basis (a 0.125 gap accepted). **R3 C1 (owner decision,
+replacing both):** `d = 0` and `L = 0` exactly, i.e. the merged cuts' lifted points bitwise equal
+and both lifted ends of every cancelled chain edge bitwise equal, else `TRIM_INVALID` ("merged cut
+points, or the ends of a boundary interval their merge cancels, are not bitwise equal in 3D (lift
+not certified: a gap in the trim)"); `trim_sag_bound` carries no identification term. Codex's fixture (outer and hole chords ulps apart in the chart, 8e-9 apart in 3D, the
+interval x = 3..3.25 cancelled) is refused at every sag. E2 joins move chart azimuths only, never a 3D point (the
+offsets measure them), so they identify no vertices. **D2:** the plane
+deviation is measured directly through an exactly orthonormal chart (above). **D3:** the trim-sag
+check `sag (1 + 64 eps)` plus N1's rounding offsets (above). **D4:** an arithmetic error in the
+lift is `TRIM_INVALID` with fixed text; a seam (one edge used twice) is `TRIM_WINDS_SUPPORT`; the
+tests build trims the model would refuse with `_put_entity`.
+
+**Domain (no new constant).** A cone trim reaching the apex (a ring point within N1's apex rule of
+an exactly zero radius, or `rho(h)` at most its rounding at a ring point) is `OUT_OF_DOMAIN`; otherwise `rho > 0`
+on the whole chart region (`rho` is linear in `h`, every mesh point's `h` lies between ring
+points'). Small radii are bounded by N1's `MIN_DISPLAY_RADIUS_RATIO`, large ones by the slab
+budget. Large-radius note (N3c finding): at radius 5e8 `A_face` (about 9e-6) exceeds the Q5
+default's slack (`surface_residual = 1e-8` plus `r (2 angle a + a^2) / 8`), so an N1 chord at
+exactly the full angle step on the largest radius (sweep / angle an integer) is `EDGE_UNSUPPORTED`
+by rounding alone (the 3e-6 / 5e8 frustum at sweep .5, angle .05); the T_face formula (Q5) was not
+changed.
+
+### Refusals (fixed texts; `REFUSAL_CODES` unchanged, owner decision)
+
+| code | text (after `face <id>: `) |
+|---|---|
+| `SUPPORT_UNSUPPORTED` | "the face has an explicit parameterization"; "its support is not a plane, cylinder or cone" |
+| `TRIM_WINDS_SUPPORT` | "a loop winds around the support's axis" (its steps, the closing one included, sum to more than pi in magnitude); "the trim's azimuth extent is not certifiably below 2 pi (the support would be covered twice)" (R2 H2); "the face uses one edge twice (a seam or slit)" |
+| `OUT_OF_DOMAIN` | N1's and N2's domain refusals (N2's ring cap and its ring-point cap against the coedge count, "trim too complex for display: at least N ring points (MAX_SLAB_RING_POINTS = ...)", before the seam scan, R2 L3; the ring-point cap while the rings are sampled, with N2's text "... N ring points (...)", R1 M4); "a nonzero coordinate or support parameter is below 2**-200 in magnitude (the lift's domain)" (R2 M1/M2); "a coordinate or support parameter is above 2**200 in magnitude, or not finite (the lift's domain)" and "a derived quantity of the lift is not finite, or a nonzero one rounded to 0 (the lift's domain)" (R5 H1); "its plane's vectors are parallel to within a sine of 1e-12"; "its refinement needs more than 200000 slab lines (too complex)"; "its trim reaches the cone's apex (...)" |
+| `EDGE_UNSUPPORTED` | N1's edge refusals; "a boundary chord deviates from the plane / cylinder / cone by up to X, above the face tolerance T"; "edge E's drawn chords leave its curve by up to X, above the sag S" (only with `tol.sag`) |
+| `TRIM_INVALID` (trims) | "a loop has no coedges"; "consecutive coedges do not meet bit for bit"; "two ring points coincide in the chart"; N2's trim refusals (crossing, touching rings, ...) |
+| `TRIM_INVALID` (uncertified lifts) | "two mesh vertices coincide in the chart (lift not certified: ...)"; "the mesh boundary is not the chain of the ring chords (lift not certified)"; "a mesh edge is not shared by exactly two oppositely oriented triangles (lift not certified)"; "a chart triangle is not strictly counter-clockwise (lift not certified)"; "a lifted triangle folds against the face normal (lift not certified)"; "a lifted triangle's deviation bound exceeds the face tolerance (lift not certified)"; "merged cut points, or the ends of a boundary interval their merge cancels, are not bitwise equal in 3D (lift not certified: a gap in the trim)" (R3 C1); "a zero-area lifted triangle is not covered by the triangles kept beside it (lift not certified: it cannot be dropped)" (R3 C3); "the lifted boundary is not simple: its projection back to the chart crosses or touches itself (lift not certified: lifted triangles may overlap)", "the lifted boundary's loops are not nested as the trim's: not exactly one positively oriented loop in the projection back to the chart (lift not certified)", "a lifted triangle's projection back to the chart is not positively oriented (lift not certified: lifted triangles may overlap)", "a lifted point is too close to the support's axis, or too far from its chart point, for the projection back to the chart (lift not certified)" (R4); "an arithmetic error in the lift" |
+
+### Evidence
+
+Tests: `tests/test_display_tessellation_lift.py` (N3a, plane), `..._lift_cylinder.py` (N3b; E2, E3;
+the lift's frame and cross product pinned bit for bit to N1's), `..._lift_cone.py` (N3c: T12, T13,
+every corpus cone face with its expected code, window patches on tilted, narrowing, equal-radius
+and negative-height cones). Every accepted mesh is checked by independent oracles: exact Fraction
+combinatorics, a 50-digit mpmath paired deviation on barycentric grids and the footprint
+orientation against the exact frame. Evidence folder `display-tess-evidence-20261125`: fuzz
+`n3a_fuzz.py` (planar), `n3b_fuzz.py` (cylinder), `n3c_fuzz.py` (cone), 0 oracle failures and 0 raw
+exceptions each (`n3c-fuzz.txt`); the plane and cylinder lifts are bit-identical to 57dc038 across
+the N3c changes (`n3c_bits.py`, `n3c-bits-compare.txt`); timing `n3c-bench.txt`.
+
+### Codex round 1 (R1): class audit
+
+`tests/test_display_tessellation_lift_n3r1.py` holds every reproduction (failing on ee0bc2c:
+`n3r1-old-run.txt`). Each finding's class was searched through the module:
+
+| class | sites | outcome |
+|---|---|---|
+| H1 vertex identifications certified in the chart only | D1 cut merge; boundary-edge cancellation; E2 azimuth join; N2's equal ring points; bit-equal coedge ends | merge + cancellation: `d + L` measured, counted, `<= T_face` (above); E2 moves no 3D point; equal ring chart points and broken coedge ends stay refused |
+| M1/M3 decisions scaled by world placement | Q7 thin gate (`A_face`); plane `A_face`; cylinder/cone `A_face`; cuts' `16 eps max|X|`; E2 join width; N1 apex rule; trim-sag resolution | thin: exact decision; plane, cylinder, cone: origin-relative stage then (plane) exact; cuts: `cut_rounding` from their chords in the local stage; E2, apex and trim resolution are the stored points' own representation (`ulp(|X|)`), kept |
+| M2 created points' rounding omitted | ring vertices (N1, counted); cut points incl. refinement cuts (now in `trim_sag_bound`; already in the deviation, measured on a plane, `rho` on curved supports); merged points (`d + L`) | fixed |
+| M4 budgets after work | ring points and rings (now while sampling); refinement lines (before N2); exact fallbacks (per thin triangle or per point over the float bound) | fixed |
+| L1 sampled oracles | cylinder and cone orientation (now the exact footprint minimum); curved paired deviation (kept, named "sampled"); plane on-chord test (now exact rationals with the rounding of `A + f (B - A)`) | fixed |
+
+Changed results: `trim_sag_bound` of every face with cut points (plus `cut_rounding`, about
+`8 eps |X|`); `degenerate_count` now counts only exempt triangles (zero or undecidable normals);
+planar faces through N2 slab lines an ulp from a vertex (the private `_extra_x` seam of the fuzz)
+whose rounding-thin triangles truly fold are refused (`n3r1-bits-compare.txt`); far-from-origin
+planar, cylinder and cone faces that rounding alone refused are accepted.
+
+### Codex round 2 (R2): decisions and class audit
+
+`tests/test_display_tessellation_lift_n3r2.py` holds every reproduction (failing on 8cb91bc:
+`n3r2-old-run.txt`). Owner decisions (standing approval, the recommended options):
+
+- **H1 (Q8 wins).** An identification is allowed only within the rounding allowance `A_face`
+  (above, Decision D1): no accepted mesh has a boundary gap beyond rounding.
+- **H2 (injectivity).** On a cylinder or cone the unwrapped azimuth extent of all rings, raised by
+  twice E2's azimuth rounding, must be below 2 pi, else `TRIM_WINDS_SUPPORT`. **Injectivity:** the
+  exact map `S*(theta, h) = o + rho(h) c(theta) + h a*` is injective on any strip of azimuth width
+  below 2 pi (`rho > 0` on the region, apex refused). Every mesh chart point lies in the rings'
+  azimuth range (cut points on ring chords, slab lines strictly inside it). The chart covering is
+  certified non-overlapping (Q2), so its image under `S*` covers the face's part of the support
+  without a second sheet: two chart triangles that are disjoint in the chart are disjoint on the
+  support. The lifted mesh is within `deviation_bound` of that image pointwise (Q4), so 3D overlap
+  beyond the certified deviation is excluded; Codex's zero-winding loop (9/8 of a turn and back,
+  18 triangles, one 3D point in two triangle interiors) is refused. Refinement adds no point
+  outside the range. A plane's chart is affine with a frame of sine at least 1e-12 (else
+  `OUT_OF_DOMAIN`, N3a): injective, nothing to add.
+- **M1 + M2 (magnitude-dependent arithmetic).** Chosen: a domain guard for the float arithmetic
+  plus scale-invariant exact decisions. Domain: every nonzero ring-point coordinate and support
+  parameter (origin, axis or plane vectors, radii, height) is at least `2^-200` in magnitude, else
+  `OUT_OF_DOMAIN` (N1 bounds the coordinates, the origin and the plane vectors above by
+  `MAX_DISPLAY_COORDINATE`, not a cone's height or radii: the upper side is round 5's, below). Why: then a nonzero
+  difference of two such numbers is at least `2^-253` and a product of up to four is normal, so the
+  relative error analyses of the filters and bounds hold for every input-derived quantity; the
+  guard costs nothing for real models (rounding residues such as `6e-17` are far inside) and is
+  simpler than a scale-invariant rewrite of every bound. What can still underflow (derived
+  quantities: a cut a tiny fraction along a chord) is decided exactly or bounded upward: every
+  bound's norm (`_norms`: bit for bit where the squares are normal, else scaled by an exact power
+  of two and raised); every float orientation filter carries an underflow slack and sends what it
+  cannot certify to the exact decision (the slack only routes); the exact thin decision on curved
+  supports scales the exact normal by a power of two (no absolute floor; Codex's 1e-304 normal is
+  a fold); the exact plane bound is converted with upward rounding (`_sqrt_up`; a positive
+  distance never becomes 0 or smaller; Codex's 1e-200 plane is now `OUT_OF_DOMAIN`, and the exact
+  bound of a 1e-170 offset is within two ulps above it).
+- **M3 (world placement).** The E2 threshold uses `max |P - o|` plus the stored coordinates'
+  representation projected onto the radial plane (above); an axial translation of model and
+  support (Codex's strip at z = 0 and 2e6) changes no decision. Purely support-frame magnitudes
+  were tried and refused translated faces whose ruling ends differ by their stored coordinates'
+  rounding (a window face and a frustum with a hole at a lateral 1e3 to 1e5: their azimuths stayed
+  ulp-wide slabs whose wall triangles fold), so the stored representation stays in, projected. The
+  rounding-thin width limit and H1's allowance stay `A_face` (the stored points' own
+  representation, world-scaled by nature). Limit found: the tripod's x-axis skins translated by
+  1e4 or more get consecutive N1 samples 3e-13 apart (N1's output on the translated edges; at 1e6
+  N1 refuses the edge), which N3 refuses `TRIM_INVALID`; the invariance test uses 1e3 and 3e4.
+- **L1.** The exact plane decision compares squared quantities (`D^2 = q + b1 sqrt(U) + b2
+  sqrt(V)` against `limit^2`, signs of sums of square roots decided by squaring): a vertex exactly
+  T_face off the plane at z = 2e6 is accepted (it was refused `EDGE_UNSUPPORTED`).
+- **L2.** The orientation oracles admit a non-positive triangle only under the module's exact rule:
+  on a plane an exactly zero normal; on a cylinder or cone a zero normal, or a footprint minimum
+  within `64 eps (1 + |k|) |n|` (twice the module's margin) of a rounding-thin triangle. The ee0bc2c
+  module's exempt fold on Codex's 1e6 face fails it.
+- **L3.** N2's ring cap and its ring-point cap (against the coedge count, each coedge giving at
+  least one ring point) are checked before the seam scan.
+- **P1.** The planar orientation of what the first filter cannot certify: a vectorised tight
+  filter (Shewchuk's bound per normal component and the float `u x v` error) decides almost all
+  (polygon400_holes20: all 625), integers only for the rest.
+
+| class | sites | outcome |
+|---|---|---|
+| H1 identifications beyond rounding | D1 merge `d`; chain cancellation `L`; E2 join (chart only); equal ring chart points | merge + cancellation `<= A_face`; E2 moves no 3D point, a join of two N1 samples refused (unchanged) |
+| H2 injectivity of the chart -> 3D map | cylinder / cone azimuth unwrap (net winding only); holes' 2 pi sheet shift; refinement lines; cone apex; plane frame | extent check over all rings after the shift; lines inside the range; apex `OUT_OF_DOMAIN` (unchanged); plane sine `>= 1e-12` (unchanged) |
+| M1/M2 magnitude-dependent arithmetic | curved thin decision (absolute `2^-1000` floor, underflowing `|n|`); plane exact bound (`float(D^2)` to 0); ring-sign and chart-orientation filters (absolute floor, exact fallback); 3D orientation filters (margin underflow); bound norms (offsets, sizes, cut rounding, identification); trim sag (N1's functions) | normalised exact normal, no floor; `_sqrt_up`; filters kept (the floor only routes to the exact decision); 3D filters: underflow slack, undecided go exact; `_norms`; N1 unchanged; inputs below `2^-200`: `OUT_OF_DOMAIN` |
+| M3 world-placement thresholds | E2 join; extent rounding; thin width limit; H1 allowance; N1 apex rule; trim-sag resolution; local/exact fallbacks | E2 and extent: support frame plus projected representation; thin, H1: `A_face` (representation, kept); apex and trim resolution: N1's own rules (kept) |
+| L1 inverse-square-root enclosures | plane exact decision | exact squared comparison |
+| L2 oracle exemptions | plane, cylinder, cone orientation oracles | the module's exact rule |
+| L3 budgets after scans | seam scan; N1 sampling (R1); refinement lines (before N2) | ring and coedge counts first |
+
+Changed results: none on the bit-identity sets vs 8cb91bc (`n3r2_bits.py`, `n3r2-bits-compare.txt`:
+the planar 1200-face fuzz and corpus, 1000 cylinder and 600 cone fuzz faces, every corpus plane,
+cylinder and cone face at both steps: points, triangles, chart, source, scalars and refusals
+identical). By construction they change only for: identifications beyond `A_face` (now refused),
+cylinder or cone trims of azimuth extent near or above 2 pi (refused), inputs with nonzero
+magnitudes below `2^-200` (`OUT_OF_DOMAIN`), faces far from the origin along a coordinate-aligned
+axis whose azimuths the world reach had joined (no longer joined; Codex's strip accepted), wide
+triangles the float filter could not certify but whose exact orientation is positive (accepted;
+before refused unseen), and points exactly at T_face off a plane (accepted). Fuzz (0 oracle failures,
+0 raw exceptions each): planar 1141 / 1200 accepted, cylinder 1148 / 1177, cone 947 / 1046
+(`n3r2-*-fuzz.txt`).
+
+### Codex round 3 (R3): owner contract decisions C1-C3 and class audit
+
+`tests/test_display_tessellation_lift_n3r3.py` holds every reproduction (failing on 692e819:
+`n3r3-old-run.txt`, 18 of 21; the two M3 placement tests and one decision sanity test pass there,
+as C2 makes a placement-dependent refusal no defect). Three classes came back a third time, each
+through a new allowance (the retry limit), so the owner simplified the contract (2026-11-27,
+replacing R1/R2 H1 and the R1/R2 M1/M3 rules where they conflict):
+
+- **C1 Identifications are exact.** Vertices are identified (D1 merge, any dedup) only when their
+  lifted 3D points are bitwise equal; a chain edge cancels only when both lifted ends are bitwise
+  equal (`L = 0`); coedge ends must meet bitwise (N1's shared vertices). Otherwise `TRIM_INVALID`.
+  The `A_face`-based `d + L` gate is removed and `trim_sag_bound` carries no identification term.
+  **E2 stays** (chart-only azimuth join, moving no 3D point): it can never identify unequal 3D
+  points because every identification goes through the bitwise check: a join making two N1 samples
+  one chart point is refused ("two ring points coincide"), a cut landing on a ring vertex's chart
+  point is refused ("two mesh vertices coincide"), and cuts made equal in the chart are merged
+  only if bitwise equal in 3D. Codex's r3 fixture (ill-conditioned plane, `A_face` 15646, a 0.125
+  gap) and the r1/r2 fixtures are refused. Cost: faces whose holes align with other rings to
+  within ulps in the chart while their 3D cuts differ by rounding are refused (the grid-aligned
+  polygon400_holes20, the tip fixture; see the changed results).
+- **C2 Translation invariance is not a requirement; only fail-open matters.** Thresholds are kept;
+  the translation tests assert only "accepted -> certified". **Known limit:** the tripod skins
+  moved by 1e3 are all accepted; moved by 1e4 along a coordinate axis 6 to 12 of the 18 are
+  refused (N1 returns consecutive samples 3e-13 apart, "two ring points coincide", or folds), at
+  1e5 N1 itself refuses 11 edges. A placement-dependent refusal takes the consumer's old route.
+  Codex's r3 oblique strip (refused after an axial translation along `(1, 1, 0)`) may be refused
+  or accepted; accepted, it is certified.
+- **C3 No orientation margin** (Q7 above). Exact fallback on curved supports
+  (`_thin_curved`): with the exact normal `n` (integers) and `g(t) = P cos t + Q sin t + L`
+  (`P = sense n . e1`, `Q = sense n . e2`, `L = -sense k n . a`, exact rationals of the stored
+  floats), `|g*(t) - g(t)| <= E = |n| (sqrt(2) FE + (|k| + kerr) FE + kerr (1 + FE))` for the exact
+  support normal `c*(t) - k* a*` (frame within `FE` per unit vector, `kerr = 8 eps |k|` for the
+  computed slope, `|n|` rounded up). The cosine and sine at the footprint ends are enclosed
+  rationally (fixed-point Taylor series in integers, 128 bits, counted truncation; no libm
+  assumption). Certified positive iff: footprint below pi (exactly, against the float pi); both
+  ends' lower bounds of `g - E` positive; on a cone also `L - E > sqrt(P^2 + Q^2)` (by squares) or
+  `g'(lo) > 0` or `g'(hi) < 0` (enclosed: the minimum not inside). Zero normal: dropped;
+  otherwise a fold. Codex's r3 M1 predicate (minimum `-32.0156 eps |n|`) is a fold.
+- **L1.** The cylinder and cone orientation oracles have no exemption (no 64 eps, no width limit):
+  a published triangle with a non-positive exact footprint minimum fails them (Codex's M1 case
+  does); the planar oracle requires an exactly positive normal; `_check_combinatorics` restores the
+  dropped triangles (an exact cover of zero-normal, chart-CCW triangles, checked against
+  `degenerate_count` and the drop rule) and checks the covering with them, and every cancelled
+  chain edge with bitwise-equal ends.
+- **L2.** The ring cap is checked from `len(face.holes)` before the ring list is built (Codex's
+  100000-hole face: peak memory below 100 kB, was 1.6 MB).
+
+| class | every path of the kind | outcome |
+|---|---|---|
+| C1 identifications with an allowance | D1 merge (`_merge`, chart-equal cuts); chain cancellation (`_combinatorial`); coedge joins (`_ring`, was `np.array_equal`: -0.0 == 0.0); E2 azimuth join (`_join`, `_SNAP`); equal ring chart points (plane and curved); cut on a ring vertex; N2's own slab-line dedup (`np.unique` of x, chart only, pinned); refinement slabs (`np.unique`, chart intervals) | merge + cancellation: bitwise 3D (`_check_identified`); coedge joins: bitwise; E2: chart only, guarded as above; equal ring points and cut-on-vertex: refused (unchanged); N2 and slab dedups identify no 3D points |
+| C1 allowances in reported bounds | `trim_sag_bound` (`d + L` removed; `cut_rounding` kept: a cut's own rounding on its chord, not an identification); `_trim_sag`'s rounding-level vertex offsets (Q6 enforcement, D3) | identification term removed; the rest unchanged (not identifications) |
+| C3 orientation margins | curved fallback `32 eps (1 + |k|) |n|` exemption and its `A_face` width limit; the fallback's `inside` test with `+-margin`; planar zero-normal exemption (kept in the mesh); the float filters (plane `(16 eps + 2 alpha)`, cylinder `40 eps`, cone `40 eps (1 + |k|)` times `|d1| |d2|`); chart orientation (`_orient_positive`), ring signs (`_ring_sign`) | exemption, width limit and margin removed (enclosure); zero normals dropped and counted; float filters kept as certify-only error bounds (derived budget about 13 eps + 17 eps |k|, threefold slack, libm cosine/sine assumed within a few ulps; nothing they cannot certify is accepted without the exact decision); chart and ring signs exact (unchanged) |
+| C2 placement-dependent refusals | E2 threshold, extent rounding, `A_face`, local/exact fallbacks | kept (C2); tests assert "accepted -> certified" |
+| L2 budgets after copies | ring list expansion; coedge count; ring-point cap while sampling | ring count from `len(holes)` first; the rest unchanged |
+
+Changed results vs 692e819 (`n3r2_bits.py`, `n3r3-bits-compare.txt`): refused now, the grid-aligned
+polygon400_holes20 at both steps (C1: merged cuts not bitwise equal in 3D; the jittered bench face
+is unchanged) and 7 of the 1200 planar fuzz faces, all in the private ulp-slab "extra" mode (1 by
+C1, 6 because a zero-area triangle holding an ulp-scale spike of the ring, e.g. a ring vertex
+2.7e-16 from two cuts, is not covered by kept triangles); `triangles` only (the zero-area ones
+dropped, every other field identical, `degenerate_count` the same number) on 59 planar, 37 of the
+763 cylinder and 20 of the 447 cone fuzz faces; identical: the other accepted fuzz faces, every
+refusal, the tripod skins, the 400-face cylinder and every other corpus plane, cylinder and cone
+face at both steps. No face is newly accepted.
+
+Fuzz on the r3 tree (0 oracle failures, 0 raw exceptions each; the oracles verify the module's
+dropped triangles as a witness): planar 1134 / 1200 accepted (`n3r3-planar-fuzz.txt`), cylinder
+1148 / 1177 (`n3r3-cylinder-fuzz.txt`), cone 947 / 1046 (`n3r3-cone-fuzz.txt`); the scripts' line
+"rounding-thin (exempt) triangles" now counts dropped zero-area triangles. Timing vs 692e819
+within noise (`n3r3-bench.txt`: tripod 18 skins 75.6 -> 76.9 ms, 400-face cylinder 775 -> 774 ms,
+polygon400_holes20 62.7 -> 62.1 ms at 7.5 deg). All display tests: `n3r3-display-run.txt`.
+
+### Codex round 4 (R4): global injectivity of the lift
+
+`tests/test_display_tessellation_lift_n3r4.py` holds the reproductions (all 12 failing on 5c4d38c:
+`n3r4-old-run.txt`). Codex's r4 High: a topology-valid cylinder face whose chart is certified and
+whose lifted triangles are each oriented and within the deviation bound, yet two lifted triangles
+cover the same open patch: the two sides of a notch are 1e-5 apart in the chart, less than the
+lifted chords' azimuth deviation (about 1e-4), so the lifted sides cross. The same CLASS as r2 H2
+(chart non-overlap plus per-triangle orientation does not imply that the lifted triangles do not
+overlap in 3D), now through a chord deviation instead of a winding. The aborted run's lead (a loop
+that self-crosses in 3D on the plane x = 1 but not in the chart, forced in topology-invalid) was
+accepted with overlapping triangles too.
+
+**Decision (owner standing approval, recommended option): a certificate implying global 3D
+injectivity**, not another local check (`_check_projection`, run last on every accepted mesh, so no
+earlier refusal or accepted output changes):
+
+- **The projection.** `P` maps 3D back to the chart and is a function on a neighbourhood of the
+  support: on a plane `P(X) = ((X - o).e1, (X - o).e2)`; on a cylinder and a cone `P(X) =
+  (azimuth of (x, y), z)` with `(x, y, z) = M (X - o)`, `M` the rows `e1, e2, a`. The module's FLOAT
+  frame vectors are taken as exact rationals: `P` is then an exactly defined map (it need not be
+  orthonormal) whose predicates are rational. Two distinct points of the lifted mesh at the same 3D
+  position have the same `P`, so it suffices that `P` maps the published mesh injectively.
+  Preconditions (refused `TRIM_INVALID` otherwise): every mesh point's distance from the axis in
+  M-space `rho > 16 err` (`err = 4 eps |fl(X - o)|_1` bounds `x, y, z`), its computed azimuth within
+  pi / 4 of its chart azimuth (the unwrapping), every published triangle's P-azimuth range below pi
+  (so it misses the axis), every boundary edge's below pi / 2 (exact `cross2` comparisons of pairs),
+  and the whole mesh's P-azimuth range below 2 pi (`TRIM_WINDS_SUPPORT`: `P` single-valued, the
+  branch cut outside the mesh). On a cone the trim already avoids the apex (`rho > 0`, T13).
+- **(i) Local.** Every published triangle's P-image is positively oriented: the Jacobian of `P` on
+  the flat triangle. Plane: `n . (e1 x e2)` (float filter `24 eps |d1| |d2|`, else the exact normal
+  against the exact `e1 x e2`). Cylinder and cone: `n . (cos t f1 + sin t f2)`, `f1 = e2 x a`, `f2 =
+  a x e1` (Binet-Cauchy: `(M d1 x M d2) . (cos t, sin t, 0)`), over the triangle's P-azimuth range
+  (the hull of its vertices' azimuths, widened by their error bounds; a convex set in an open
+  half-plane through the axis). Filter `40 eps |d1| |d2|` at both ends (an arc argument as for
+  Q7), else exactly: the vertices' exact azimuths checked inside the range with the rational
+  cosine/sine enclosures, then `_thin_curved` with the exact frame `(f1, f2)` and `E = 0`. **How Q7
+  relates:** on a plane Q7's sign `n . (u x v)` is the Jacobian of the orthogonal projection, the
+  float frame's `e1 x e2` within `alpha` of it, so (i) is a second decision of the same quantity
+  (no accepted face changed); on a cylinder Q7's `n . c*(t)` is the Jacobian of the orthonormal
+  `P*` over the chart footprint, (i) the float frame's over the P-azimuth range (they differ by the
+  frame error and by the cut points' chart-vs-lift azimuths); **on a cone they differ in kind**:
+  Q7 uses the support normal `n . (c - k a)`, `P`'s Jacobian is `n . c` (radial, perpendicular to
+  the axis): a triangle whose normal is far from the radial direction (a steep `k`) can pass Q7 and
+  fold under `P`; (i) refuses it (test).
+- **(ii) Boundary.** The P-image of the lifted boundary chain (the published mesh's boundary edges,
+  after the chart chain's D1 cancellations; chain vertices with bitwise-equal lifted points, which
+  C3 makes when two cuts an ulp apart in the chart lift onto one point, are one point and the
+  zero-length edge between them is dropped) must be a set of pairwise disjoint simple closed
+  curves: every vertex once a tail and once a head; adjacent edges meet only at their shared
+  vertex; non-adjacent ones not at all. On a curved support the P-image of a lifted chord is a
+  curve (`z` linear, the azimuth monotone), so the predicates are exact on the curve, not on its
+  chord: two edges meet iff a common height and a common ray (`cross2 = 0`; the pair's azimuths lie
+  within pi) is reached at parameters in `[0, 1]`; with the heights eliminated `cross2` is a
+  quadratic in one parameter, and a root in the feasible interval is decided exactly (ends and the
+  rational vertex); adjacent edges from `B` (`U = A - B`, `V = C - B`) meet again iff `s Uz = t Vz`
+  and `s (cross2(U, B) + (Uz / Vz) cross2(B, V)) + s^2 (Uz / Vz) cross2(U, V) = 0` at `0 < s, t <=
+  1` (linear after the root `s = 0`), horizontal edges by their azimuth intervals. Candidates: the
+  adjacent pairs behind a float filter (apart in azimuth, apart in height, or `|alpha'| > min(|Uz|,
+  |Vz|) |beta|`; plane: not collinear or pointing apart), the non-adjacent pairs from a sweep over
+  the edges' bounding boxes (sorted by azimuth, `O(n log n + pairs)`; more than 4e6 box pairs is
+  `OUT_OF_DOMAIN`). Otherwise `TRIM_INVALID` ("the lifted boundary is not simple").
+- **(iii) Nesting.** Each loop's orientation at its lexicographically smallest P-vertex (exact:
+  the azimuth is monotone along every edge, so the extreme is a vertex; the sign of the tangents'
+  cross product there, `cross2(v, W) Uz - Wz cross2(v, U)`, on a plane the orientation of `v`,
+  next, previous). Exactly one loop may be positive (the outer one, holding vertex 0), the others
+  negative; else `TRIM_INVALID` ("not nested as the trim's").
+
+**Argument** (preconditions above). Let `F = P o L` on the chart region `R` (`L` the lift by
+vertices, affine on each chart triangle). By (i) `F` is an orientation-preserving local
+homeomorphism on every published triangle (and injective on it: two of its points on one fibre ray
+would put the ray in the triangle's plane, where the Jacobian vanishes). For a point `y` off the
+image of the edges and of the dropped zero-area triangles (a null set), the degree of `F` at `y`
+is the number of its preimages (each counts +1) and equals the winding number of `F(dR)` around
+`y` (the boundary chain's image, a zero-length chain edge a point). By (ii) and (iii) that is the
+sum over disjoint simple closed curves of +1 inside the one positive loop and -1 inside each
+negative one, hence at most 1. So no two published triangles' P-images share an interior point
+(their interiors are open sets, and a.e. point of an intersection would have two preimages); as
+`P` is a function on 3D, no two published lifted triangles share an interior point in 3D, and the
+boundary curves are injective. As the degree is also `>= 0` everywhere, every negative loop lies
+inside the positive one and outside the others: the trim's nesting.
+
+Codex's notch face and the lead are refused ("the lifted boundary is not simple"). The oracles:
+`_check_cylinder` and `_check_cone` now call `_projection_overlaps`, an independent EXACT test of
+P-image overlap (P about the stored axis direction, in Fractions; every pair of mesh edges meets
+at most at a shared vertex, no vertex strictly inside another triangle's P-image (its fibre ray
+meets the triangle's interior), every triangle P-positive, 50 digits): the Codex mesh with the
+certificate switched off fails it.
+
+| class: chart-only reasoning for a 3D property | where | outcome |
+|---|---|---|
+| chart covering implies a 3D covering | `_combinatorial` (Q2) | kept (a chart statement); 3D non-overlap now by the P certificate |
+| chart extent below 2 pi implies a single sheet | `_check_extent` (H2) | kept; the P certificate also checks the lifted points' own P-azimuth range |
+| triangle orientation over the CHART footprint | Q7 (`_thin_decision`, plane filter) | kept (Q7 is a statement about the paired support normal); the P-Jacobian (i) over the lifted P-azimuth range added |
+| cut points ordered along their chord in the chart | `_combinatorial` chain order | the lifted cuts' order (rounded `A + f (B - A)`) is now covered by (ii) (adjacent chain edges meet only at their shared vertex) |
+| distinct chart points are distinct 3D points | `_merge`, `_RING_COINCIDE`, E2 join | identifications bitwise in 3D (C1, unchanged); two chain points equal in 3D are one point in (ii) and a self-touch is refused; equal in 3D interior points are covered by (i)-(iii) |
+| chart notch width vs chord deviation | the r4 High | (ii) |
+| winding / sheet of the chart | `_unwrap`, `_join` | unchanged (r2 H2); P single-valued by its own range check |
+| zero-area triangles dropped | `_drop_zero` | exact 3D coverage (unchanged); null set in the degree argument |
+| deviation bounds | `_CylinderBound`, `_ConeBound`, plane bounds | paired (3D point vs `S*` of its chart point): a 3D property by construction, unchanged |
+
+Changed results vs 5c4d38c (`n3r2_bits.py`, `n3r4-bits-compare-raw.txt`): none. Every face of the
+bit-identity sets (1200 planar fuzz faces and the planar corpus/bench faces, 763 cylinder and 447
+cone fuzz faces, every corpus plane, cylinder and cone face at both steps) has the same outcome and,
+when accepted, bit-identical output; the tripod skins and the 400-face cylinder stay accepted.
+Fuzz on the r4 tree (0 oracle failures with the new overlap oracle, 0 raw exceptions each, same
+accept counts as r3): planar 1134 / 1200 (`n3r4-planar-fuzz.txt`), cylinder 1148 / 1177
+(`n3r4-cylinder-fuzz.txt`), cone 947 / 1046 (`n3r4-cone-fuzz.txt`). Timing vs 5c4d38c
+(`n3r4-bench-raw.txt`, 7.5 / 22.5 deg, loaded PC): tripod 18 skins 76.0 -> 82.1 / 51.8 -> 56.6 ms
+(+8 / +9 %), 400-face cylinder 780 -> 888 / 787 -> 896 ms (+14 %), polygon400_holes20 62.8 -> 76.2
+/ 59.6 -> 67.7 ms (+21 / +13 %). Reasons: the certificate is new work on every accepted face, about
+0.25 ms fixed per face in NumPy call overhead (the 400-face cylinder's faces have 4 triangles
+each); on the jittered polygon about 520 non-adjacent boundary edge pairs pass the float filters
+(ulp-short chain edges from slab lines an ulp apart) and are decided exactly, and 625 sliver
+triangles' P orientation goes exact.
+
+Remaining assumption (documented, as for the float filters since N3b): the libm `atan2`, `cos`,
+`sin` within a few ulps in the float filters and in the boxes that prune candidate pairs; every
+decision the filters cannot make is exact (rationals; the azimuth enclosures of (i)'s fallback are
+the fixed-point ones of C3).
+
+### Codex round 5 (R5): the magnitude domain, upper side; speed of the R4 certificate
+
+`tests/test_display_tessellation_lift_n3r5.py` holds the reproduction (9 of its 13 H1 tests fail on
+75c52fc, `n3r5-old-run.txt`; the other 4 are acceptance checks; 5 more test the P1 scalar path
+against the array path). Codex's r5 High: a topology-valid
+cone face (`radius_end = 1e307`, `height = float max`) for which `height |axis|` overflowed, so
+`_ConeChart` computed the slope `k = 0` (exactly about 0.0556); the face was accepted with
+`deviation_bound` 3.23e-4 against a paired deviation of 3.76e-4 at a returned vertex, and its first
+triangle folds against the exact cone normal. The class: R2 M1/M2 bounded the magnitudes from below
+only; N1 bounds the ring coordinates, the origin and the plane vectors by 1e9 but not a cone's
+height or radii or a cylinder's radius.
+
+**Decision (owner standing approval, recommended option): the symmetric upper guard.** Every
+ring-point coordinate and every stored support number (origin, axis, plane vectors, the stored
+radial and circumferential directions, radii, height, sweep and start angle) must be finite and at
+most `2^200` in magnitude, else `OUT_OF_DOMAIN` ("a coordinate or support parameter is above
+2**200 in magnitude, or not finite (the lift's domain)"), checked with the lower side, before any
+lift arithmetic on them (`_check_magnitudes`). In defence in depth (the audit shows they cannot
+fire inside the domain): the cone slope must be finite and nonzero when `r1 != r0`, and a cylinder's
+or cone's `T_face` finite, else `OUT_OF_DOMAIN` ("a derived quantity of the lift is not finite, or
+a nonzero one rounded to 0 (the lift's domain)", `_check_derived`). The Codex cone is refused by the
+guard; with the guard bypassed the slope check alone refuses it; with both bypassed the old mesh
+comes back and fails the exact-slope oracle (tests). The same face shape with in-domain parameters
+(the Codex slope at heights 9e59 and `2^200`, and a nearly cylindrical `k = 2^-180`) is accepted
+and passes the independent cone oracle (exact slope, deviation, footprint orientation, no overlap).
+
+**Audit of every derived float quantity inside the domain.** Domain facts: ring points, mesh points
+(cuts on ring chords) and the origin within `2^30` (N1), so `|X - o|`, `h`, the frame coordinates
+`x, y` within `2^32`; the axis and stored frame unit to 1e-9 (N1); `r, r0, r1, |height|` in
+`[2^-200, 2^200]` (or a zero radius: the apex rule); the display angle at most pi / 2 (N1); chart
+azimuths within `2^4` (each ring's steps sum below pi, holes shifted onto the outer sheet); every
+nonzero input at least `2^-200`, every nonzero difference of inputs at least `2^-252`. Underflow:
+every positive bound is a sum that contains `A_face >= 32 eps max |X| >= 2^-250` and is raised by
+`1 + 8 eps` at the end, so the absolute loss of a positive term underflowing (at most a few
+`2^-1074` per operation, a few hundred operations) is absorbed; every float filter carries an
+underflow slack and only routes to an exact decision (R2).
+
+| quantity | where | range inside the domain | outcome |
+|---|---|---|---|
+| cone slope `k = (r1 - r0) / (height |axis|)` | `_ConeChart` | denominator in `[2^-201, 2^201]`; `|k|` in `[2^-453, 2^402]`, exactly 0 iff `r1 = r0`; its relative error the stated `8 eps` (no over/underflow) | proven; also checked (`_check_derived`): the r5 High |
+| `rho = r0 + k h`, `rho_rounding` | cone chart, bounds | `<= 2^435` | proven finite |
+| `T_face = r_max (angle + a)^2 / 8 + residual` | cylinder, cone | `<= 2^202 + residual` | proven; also checked |
+| plane sine `|u x v| / (|u| |v|)`, `alpha` | `_PlaneChart` | products of two inputs in `[2^-400, 2^62]`, normal; `alpha <= 2^-9` (sine >= 1e-12) | proven (R2) |
+| `A_face`, `A_loc` (cylinder, cone, plane) | `rounding`, `local_rounding` | `<= 2^436` | proven finite |
+| boundary-chord bounds `rho dT^2 / 8 + |k| dT dH / 4` | step (5) | `<= 2^441` | proven finite |
+| cylinder Taylor bound `E(T)` (variances, `r kt`, edge maxima `gap^2 / (4 tau^2)`) | `_CylinderBound` | `<= 2^212`; the quotient only where `tau^2 > 0`, at most `tau^2 / 4` | proven finite |
+| cone bound `H(w)`: `D_ij`, `P_i`, `det = 4 D01 D02 - m^2`, `det_error`, `flat^2`, the critical point | `_ConeBound` | `D, P <= 2^446`, every product `<= 2^894` (the module's largest float value; `2^130` headroom), the critical point only where `det > 1e-6 flat^2` (condition at most 4e6) | proven finite |
+| offsets `delta = |X - S(c)|` (squared norms) | `offsets`, `local_offsets` | `S(c) <= 2^436`, squares `<= 2^874`; underflow by `_norms` (R2) | proven |
+| Q7 filters (`40 eps (1 + |k|) |d1| |d2|`, `level = -k n . a`, `hypot(p, q)`) | `_lift_cylinder`, `_lift_cone` | `|d| <= 2^33`, `|n| <= 2^67`, values `<= 2^470` | proven finite; undecided go exact |
+| exact Q7 / projection (`kerr = 8 eps |k|`, `E`) | `_thin_curved` | rationals of the stored floats; `kerr` valid because `k` is computed without over/underflow | exact |
+| E2 join threshold `SNAP (max(1, |theta|) + reach / radius)` and `_check_extent`'s rounding | `_join`, `_check_extent` | `reach <= 2^35`; `radius = r >= 2^-200` (cylinder) or `> 8 eps |r0| >= 2^-252` (cone), so `<= 2^288`; only for a cone whose apex is the support origin (`r0 = 0`, `radius > 8 eps |k| H`) can it overflow (an axial reach `H` near the cancellation level) | finite, except that apex case: there the join or `_check_extent` (infinite rounding) refuses (fail closed; a large threshold only joins more or refuses) |
+| refinement slab middle `(left + right) / 2` | `_bisection` | chart azimuths `<= 2^4` | proven; an unsplittable slab refuses |
+| projection P (R4): `err`, `rho`, `aerr = 2.2 err / rho + ...`, boxes, product filters | `_CurvedProjection`, `_PlaneProjection`, `_check_boundary` | `err <= 2^35`, `rho > 16 err`, `aerr <= 2^5`, products `<= 2^140` | proven finite |
+| plane exact bound, `_sqrt_up` | `exact_bound` | rationals; rounded up (R2) | exact |
+| cut rounding `4 eps |(|A| + |B|)|` | `_cut_rounding` | `<= 2^-17` | proven |
+| trim sag | N1's functions (N1's domain) | N1 | unchanged |
+
+**Q7 and the projection on a cone use consistent slopes.** `P = (azimuth, axial)` does not involve
+`k`: its Jacobian sign on a lifted triangle is `n . c(theta)` (radial). Q7 and the deviation bounds
+use the one slope `_ConeChart.k`, within `8 eps |k|` of the exact one inside the domain (the exact
+fallback carries that `kerr`); the oracle uses the exact slope. The two certificates are separate
+and both must pass, so an accepted cone triangle satisfies both: Q7's `n . (c - k a) > 0` over its
+footprint and `n . c > 0` over its P-azimuth range (a test checks both exactly at every vertex of an
+accepted frustum mesh). The Codex triangle passed the projection check correctly (its radial
+Jacobian is positive) and Q7 only because `k` had become 0.
+
+**Speed (P1; the R4 certificate cost ~0.25 ms per face).** No published value changes; every float
+filter still only routes to an exact predicate:
+
+- a scalar path (`_SMALL_POINTS = 40` mesh points or fewer: the 400-face cylinder's faces): the same
+  float quantities on Python floats (the same formulas and error bounds; `math`'s `cos`, `sin`,
+  `atan2`, `hypot` within the few ulps already assumed), the same filters, the exact predicates
+  inherited from the array classes, the same checks in the same order with the same texts; a chain
+  with two tails of equal computed P (the bitwise identification) takes the array path;
+- the exact normals Q7 already computed are shared with the projection certificate (`_cached_normals`;
+  every use is a sign homogeneous in the normal);
+- on a plane, (i)'s undecided triangles go through Q7's tight filter (`_tight_dot`, the reference
+  `e1 x e2` within `_cross_error`) before the exact decision: the polygon400 slivers (625) decide in
+  floats;
+- a separating-axis filter along each segment for non-adjacent plane boundary pairs (`_beyond`: both
+  ends of one segment strictly beyond an end of the other in its direction, from differences relative
+  to that end): the ~520 pairs of pieces of one chord separated by ulp-short chain edges decide in
+  floats;
+- `_fixed` by shifts, the box sweep's height test on sorted copies.
+
+Changed results vs 75c52fc (`n3r2_bits.py`, `n3r5-bits-compare.txt`): none. Every face of the
+bit-identity sets (1200 planar fuzz faces and the planar corpus/bench faces, 763 cylinder and 447
+cone fuzz faces, every corpus plane, cylinder and cone face at both steps) has the same outcome
+(refusal code and text) and, when accepted, bit-identical output; the tripod skins and the
+400-face cylinder stay accepted. No face of these sets has a parameter above `2^200`. Scalar and
+array paths: random small chains and triangles on a plane and a cylinder give the same outcome on
+both (tests). Fuzz on the r5 tree (0 oracle failures, 0 raw exceptions each, the same accept counts
+as r4): planar 1134 / 1200 (`n3r5-planar-fuzz.txt`), cylinder 1148 / 1177
+(`n3r5-cylinder-fuzz.txt`), cone 947 / 1046 (`n3r5-cone-fuzz.txt`). The lift test files also pass on
+Python 3.13.9 (`n3r5-py313-run.txt`).
+
+Timing (`n3r5-bench.txt`: 4 runs, two bench invocations of 2 interleaved rounds each, one session;
+the PC was heavily loaded, absolute numbers about 1.5x the r4 session's; totals, medians, 7.5 /
+22.5 deg; 5c4d38c -> 75c52fc -> r5): tripod 18 skins 75.9 -> 82.2 -> 83.5 (+10 %) / 75.4 -> 84.9 ->
+83.1 (+10 %); 400-face cylinder 1164 -> 1317 -> 1217 (+5 %) / 1145 -> 1331 -> 1212 (+6 %);
+polygon400_holes20 96.0 -> 114.0 -> 107.4 (+12 %) / 95.0 -> 102.6 -> 96.6 (+2 %). The certificate
+itself (warm per-function medians): 400-face cylinder 139 -> 37 ms, polygon400 13.1 -> 4.6 ms (7.5
+deg), tripod 5.8 -> 5.6 ms. What remains is the certificate's own work on the array path: the
+tripod skins (more than 40 points per face, where the arrays are faster than the scalar path,
+measured 14.7 ms scalar) and the polygon's 5594-edge chain (the box sweep 1.4 ms, about 80 000
+u-overlapping candidates for 6841 box pairs; a uniform grid measured slower, 5.0 ms).
+
+
+### Codex round 6 (R6): scalar and array paths decide alike; the upper guard covers every stored field
+
+`tests/test_display_tessellation_lift_n3r6.py` holds the reproductions (5 of its 9 tests fail on 17c0de7,
+`n3r6-old-run.txt`; the others are acceptance checks).
+
+**M1 (the scalar certificate accepted a face the array certificate refused).** At the strict
+`rho > 16 err` cutoff the stdlib `hypot` returned one ulp more than `np.hypot` for the same lifted vertex:
+the round-5 scalar path published the triangle, the array path refused `TRIM_INVALID`. The class: the
+scalar path duplicated array-path arithmetic with other primitives. Contract (owner standing approval,
+recommended option): the scalar path gives exactly the array path's decision AND values. Audit of every
+computation the scalar path duplicates (`_display_lift.py`, `_SmallPlaneProjection`,
+`_SmallCurvedProjection`, `_projection_triangles_small`, `_check_boundary_small`):
+
+| Computation | Array path | Scalar path (r6) |
+| --- | --- | --- |
+| `fl(X - o)`, the dots with `e1, e2, a`, `err = 4 eps \|d\|_1 ...` | NumPy elementwise (sum of 3 left to right) | the same operations on floats, same order (IEEE `+ - *`: identical) |
+| `rho = hypot(x, y)`, the `rho > 16 err` cutoff | `np.hypot` | `np.hypot` on one short array (was `math.hypot`: an ulp apart) |
+| `atan2`, `round((theta - raw) / 2 pi)`, `u`, `aerr` | `np.arctan2`, `np.round`, array expressions | the same NumPy expressions on one short array (was `math.atan2`, Python `round`: `round(nan)` raised) |
+| triangle cross products, `\|d1\|\|d2\|` (`sqrt`), `24 eps` / `40 eps` bounds | elementwise `-`, `*`, `np.sqrt` | the same terms, `math.sqrt` (correctly rounded: identical) |
+| the dots `n . normal_f`, `n . f1`, `n . f2` | `normal @ v` (BLAS: order and fused multiply-add not fixed) | explicit `nx v0 + ny v1 + nz v2` in BOTH paths (the array path changed: a filter only, no published value) |
+| `cos`, `sin` of the azimuth range in the orientation filter | `np.cos`, `np.sin` | `np.cos`, `np.sin` on one short array (was `math`) |
+| `nextafter`, `min`/`max`, boxes, chain checks, adjacent and separating-axis filters | NumPy | the same expressions (checked term by term; order of raises equal) |
+| exact predicates, `_fixed`, exact azimuth enclosures | shared classes | shared |
+
+A differential test (`tests/test_display_tessellation_lift_n3r6.py`) runs corpus faces with the fast path on and
+forced off (`_SMALL_POINTS = 0`) and demands an identical outcome (refusal code and text, or bitwise
+points, triangles, chart, source and scalars); `n3r6_diff.py` runs every planar (1200), cylinder (1600) and cone
+(1400) fuzz face and every corpus face at both steps (`n3r6-diff.txt`: 0 mismatches). Changed result: the
+Codex reproduction is now refused on BOTH paths (`TRIM_INVALID`, near the axis; was accepted on the fast path).
+No other face of the bit-identity sets changes.
+
+**L1 (the upper guard omitted `Cylinder.height`).** `_upper_parameters` is now derived from the support
+instance's stored numeric attributes (every array component and float of `vars(support)`), not a hand list;
+a test sets each stored numeric attribute of `Plane`, `Cylinder` and `Cone` to `2**201` and requires the
+guard's list to exceed the bound (a missed or new field fails it). A cylinder of stored height `2**201` is
+`OUT_OF_DOMAIN`.
+
+### Codex round 7 (R7): the guard covers the base class's declared fields; unconvertible fields are a typed refusal
+
+`tests/test_display_tessellation_lift_n3r7.py` holds the reproductions (`n3r7-old-run.txt`).
+
+**M1 (a ragged stored attribute raised a raw `ValueError`) and L1 (`2**201`, or a number beside a string,
+bypassed the guard).** Both came from the guard converting every attribute of the support INSTANCE
+(`vars(support)`) with `np.asarray`, outside the typed-refusal handler. Contract (owner standing approval,
+recommended option):
+
+- **G1.** The guard covers exactly the parameters the lift reads: the declared (dataclass) fields of the BASE
+  support class (`Plane`, `Cylinder` or `Cone`), derived by introspecting the base class
+  (`_guarded_fields`). Extra attributes of a subclass are never read by the lift and are outside the domain
+  contract: they cannot change the outcome (the Codex subclass faces are accepted exactly as the plain plane's).
+  A test fails if a base field is not guarded.
+- **G2.** Each guarded field is converted to binary64 first, before any other use (`_normalised_support`): Python
+  int, `Fraction`, NumPy integer and float scalars and sequences of them convert; an int too large for a float,
+  and anything that is not a real array of the field's shape (ragged, string, `None`, complex, object, wrong
+  length) is `OUT_OF_DOMAIN` with fixed text naming the field (never the caller's value). A support whose fields
+  are already `float64` arrays and floats is used as is (ordinary inputs bit-identical); otherwise a shallow copy
+  carries the converted fields, so every later conversion sees plain floats. The handler around the lift also
+  catches `TypeError` now (fail closed, defence in depth).
+
+Audit of every conversion of caller-supplied data in `_display_lift.py` and the `face_display_mesh` tail:
+
+| Input | Conversion | Status (r7) |
+| --- | --- | --- |
+| support base fields | `_normalised_support`, before `_check_support_domain`, the rings and the lift | typed refusal (new) |
+| support subclass extras | none | never read (G1) |
+| `model`, `tol` types, face id | `_check_input`: exact-type tests | typed `GeometryError` (documented argument errors, unchanged) |
+| `tol.angle`, `tol.sag` | validated to finite floats in `DisplayTolerance.__post_init__`; `float(tol.sag)` | proven safe |
+| `model.tolerance.surface_residual`, `.length` | `float(...)` of a validated `TolerancePolicy` value | proven safe; a stray `TypeError` is now a typed refusal |
+| model points, curves, ring samples | N1 (`_edge_display_samples_and_allowance`), N1's own typed refusals; ring points are its float arrays | N1 contract, unchanged |
+| `LineRange` ends in `_trim_sag` | `np.asarray(..., dtype=float)` after N1 accepted the same edge | proven safe |
+| `_extra_x` | private test seam | out of scope |
+
+A parametrised test feeds `face_display_mesh` each base field of each support as int, `Fraction`, `np.int64`,
+`np.float32` and `np.float64` (the mesh is bit-identical to the float input's) and as huge int, `2**201`,
+string, `None`, complex, ragged, mixed, short, NaN, infinity and object (a typed `OUT_OF_DOMAIN`, never a raw
+exception).
+
+### Codex round 8 (R8): the lift runs only for exact support types with exact float fields (option A)
+
+`tests/test_display_tessellation_lift_n3r8.py` holds the reproductions (`n3r8-old-run.txt`).
+
+**H1 (a subclass `__copy__` swapped the certified plane: bound 1.8e-14 against a true deviation of 0.005), M1 (a raw
+`TypeError` from the copy step), M2 (N1 read the unnormalised support and raised a raw `TypeError` on `Fraction` /
+`longdouble` fields) and L1 (the broad `TypeError` catch reported a changing support read as `TRIM_INVALID`).** One
+class: the lift read and converted attributes of a caller object that can answer differently each time. Contract
+(owner decision, option A, recorded here and in the CHANGELOG):
+
+- **A1.** The lift runs only when `type(support)` is exactly `Plane`, `Cylinder` or `Cone`. A subclass (or any
+  other type) is `SUPPORT_UNSUPPORTED` (the code N1 already uses for an unsupported support; no new code), so
+  ANYfem keeps its old route. The same test applies to the supports of the faces beside the face's edges, which N1
+  also reads (the refusal names that face).
+- **A2.** `_snapshot` reads each declared field once with `object.__getattribute__` (and a cylinder's or cone's
+  derived `_circumferential`) into a private object of the same exact class. Each value must already be a `float`
+  (exact type; this is what the constructors store: `float(...)` scalars) or a `numpy.ndarray` of dtype float64
+  and shape `(3,)` (`_vector3`); else `OUT_OF_DOMAIN` with fixed text naming the field. No conversion.
+- **A3.** This runs before N1 or any other code reads the support for the face. For exact types with such
+  fields N1's reads and the snapshot's are the same objects, so N1 and the lift see the same numbers and N1 never
+  meets a field that raises. The domain checks, guards and the lift use only the snapshot.
+- **A4.** `_normalised_support` and its `copy.copy` are removed; the lift's handler is again
+  `(ArithmeticError, ValueError)`: with exact float fields no `TypeError` can arise from the support, and a stray
+  one is a defect to see, not a refusal to mislabel.
+- **A5.** Hostile supports (`__copy__`, `__getattribute__`, properties overridden on a subclass, private writes
+  after construction) are outside the contract, as in the solver contract; the exact-type rule is what closes the
+  class. **Changed result:** int, `Fraction`, NumPy-scalar, `float32` and list fields, converted and accepted in
+  round 7, are `OUT_OF_DOMAIN` again; subclasses accepted in round 7 are `SUPPORT_UNSUPPORTED`. Ordinarily built
+  supports are unchanged.
+
+Class audit: every read of a support attribute outside `_snapshot`: `_support_parameters`, `_upper_parameters`,
+`_guarded_fields`, `_check_magnitudes` (lines in `_lift` after the snapshot, given the snapshot), `_PlaneChart.__init__`
+(origin, u, v), `_CylinderChart` (axis, radius), the cone chart (axis, radii, height) and the apex list: each is
+reached only from `_lift_plane`/`_lift_cylinder`/`_lift_cone` with the snapshot. N1's reads (`_check_support_domain`
+gets the snapshot; edge sampling reads the model's own, identical, objects after the snapshot check).
+
+### Codex round 9 (R9): identity type checks; the preflight calls the model as N1 does
+
+`tests/test_display_tessellation_lift_n3r9.py` holds the reproductions (`n3r9-old-run.txt`).
+
+**M1 (a `Plane` subclass whose metaclass sets `__hash__ = None` raised a raw `TypeError` from the class-keyed
+dictionary lookup in `_snapshot`, on the face and on a neighbour) and M2 (the incident-face preflight called
+`model.faces_using_edge` under the lift's `np.errstate(all="ignore")`, where N1 calls it under its documented model
+error state, so a `GeometryModel` subclass that depends on that state raised a raw `RuntimeError` before N1 ran).**
+Owner decision (via the coordinator, the recommended option):
+
+- The exact-type test compares classes by identity only (`_private_fields`: `cls is Plane`, ...); no class is hashed.
+- `_check_incident_supports` calls the model through N1's own `_model_call` (the same NumPy error state as N1), and a
+  model lookup that raises there is `SUPPORT_UNSUPPORTED` with fixed text naming the face and the edge.
+- **A5 extended:** hostile or broken `GeometryModel` subclasses (overridden model methods that answer differently,
+  depend on ambient state or raise) are outside the contract, like hostile supports; the lift fails closed where it
+  calls the model itself, and N1's own calls keep N1's contract. No result changes for an ordinary model.
+
+Codex round 10 (R10, Medium): a lazy `faces_using_edge` (a generator) was iterated outside the wrapper, after N1's
+error state was restored, and could raise a raw exception. Fix (owner decision): the lookup is materialised
+(`tuple(...)`) inside the `_model_call` and its `try`, so iteration runs under N1's state and fails closed. Owner
+decision: no further review rounds on hostile-model variants; A5 holds that a hostile `GeometryModel` or support
+subclass may still raise elsewhere (N1 has the same exposure), and it is not a defect of the lift.
+
+Full suite (2026-11-27): main's quadrature gate (`test_quadrature_fixed_order_sums_20261124`) flagged the cylinder
+`reach` (`@` with a weight operand). All six `(n, 3) @ (3,)` products of the lift now use `_dot3`, the explicit
+left-to-right sum the module already used for its projections: IEEE products and sums, the same on every platform
+and memory layout. Its rounding (at most `gamma_3 sum |x_i w_i|`, `gamma_3 < 2 eps`) is within every consuming
+bound's margin (the tight orientation bound's `(1 + 4 eps)` inflation, the plane / cylinder / cone filters' 16-40 eps,
+`reach` first order in eps, so second order in the azimuth tolerance; Codex static check). Measured on Windows:
+bit-identical over the r8 fuzz seeds and the corpus. `test_display_tessellation_lift_portable` forbids BLAS
+reductions in the lift and git reads in its tests. N1/N2 (`display_tessellation.py`) still use `@` in 24 places;
+they are frozen in this slice.
+

@@ -4,6 +4,115 @@ All notable user-visible changes to ANYgeometry are documented here.
 
 ## Unreleased
 
+- N3 face lift (N3a plane, N3b cylinder, N3c cone): new public `display_tessellation.face_display_mesh(model, face_id, tol)`
+  returning a frozen `FaceDisplayMesh` (points, triangles, chart, ring_vertex_count, source, sense, face_tolerance,
+  deviation_bound, trim_sag_bound, degenerate_count) or a typed `DisplayTrimRefused`: the N2 chart mesh of the face's N1
+  rings lifted by index onto its `Plane`, `Cylinder` or `Cone`, ring vertices the N1 samples bit for bit, cut points on
+  the 3D N1 chords (T-vertices, crack-free to rounding), every certificate exact or closed-form (combinatorial coverage,
+  footprint orientation, paired deviation `<= T_face`); the analytic trim is approximated by the N1 chords
+  (`trim_sag_bound`), not covered. Owner decisions (2026-11-26, recommended options): T_face `tol.sag`, else
+  `surface_residual` (plane), else `r_max (angle + a)^2 / 8 + surface_residual`; trim distance always reported, enforced
+  only with `tol.sag`; `REFUSAL_CODES` unchanged (`TRIM_INVALID` with distinct fixed texts); D1-D4, E1 (deviation over
+  the ring vertices a cut stands for, exact edge maxima), E2 (azimuths within rounding joined; never two N1 samples:
+  `TRIM_INVALID`), E3 (at most 8 bisection rounds, then `TRIM_INVALID`). Cone (N3c): the mixed angle-height term as
+  `|k| |Cov(theta, h)|` with an exact maximum over each triangle; a trim reaching the apex is `OUT_OF_DOMAIN`. Not
+  re-exported from `anygeometry`. No change to N1 or N2 results; the N3c speed work keeps the plane and cylinder lifts
+  bit-identical to 57dc038 (400-face cylinder lift-only 255 -> 219 ms). See docs/DISPLAY_TESSELLATION.md, "Face lift
+  (N3)".
+- N3 Codex round 1 (owner decisions H1, M1-M4, L1, recommended options): a D1 merge and the boundary-edge
+  cancellation it allows must hold in 3D (the merge distance plus the cancelled length is added to `trim_sag_bound` and
+  must be at most T_face, else `TRIM_INVALID`); a rounding-thin triangle is exempt only with an exactly zero normal (or,
+  on a curved support, a sign undecidable within the support normal's rounding), otherwise its orientation is decided
+  from the exact normal of the stored points (a fold is `TRIM_INVALID` at any world position); the cut points' rounding
+  is counted in `trim_sag_bound`; planar, cylinder and cone deviation bounds fall back to origin-relative magnitudes
+  (and, on a plane, an exact rational decision) where the world-scaled bound exceeds T_face; N2's ring-point and ring
+  caps are enforced while the rings are sampled (`OUT_OF_DOMAIN`, N2's text). Changed results: `trim_sag_bound` of faces
+  with cut points, `degenerate_count` (exempt triangles only), planar faces whose thin triangles truly fold through
+  slab lines an ulp from a vertex (refused), far-from-origin faces refused by rounding alone (accepted); points and
+  triangles of every other accepted face unchanged.
+- N3 Codex round 2 (owner decisions H1, H2, M1-M3, L1-L3, P1, recommended options): a D1 identification and the
+  chain cancellation it allows are accepted only within the rounding allowance `A_face` (Q8 wins: no accepted mesh has
+  a boundary gap beyond rounding; `TRIM_INVALID`, new text); on a cylinder or cone the rings' unwrapped azimuth extent
+  must be certifiably below 2 pi (`TRIM_WINDS_SUPPORT`, new text: a zero-winding loop over more than a turn covered the
+  support twice); a magnitude domain for the lift (every nonzero ring-point coordinate and support parameter at least
+  `2**-200`, else `OUT_OF_DOMAIN`), underflow-safe bound norms, exact orientation decisions without absolute floors
+  (the exact normal scaled by a power of two) for every triangle the float filters cannot certify, and exact-to-binary64
+  bounds rounded up; the E2 azimuth join threshold from support-frame magnitudes plus the stored coordinates'
+  representation projected onto the radial plane (an axial translation changes no decision); the exact plane decision
+  by exact squared comparison (a vertex exactly T_face off the plane is accepted); the test oracles admit an exempt
+  triangle only under the module's exact rule; N2's ring and coedge budgets before the seam scan; the planar exact
+  orientation behind a vectorised tight filter. No change on the bit-identity sets vs 8cb91bc (planar 1200-face fuzz
+  and corpus, 1000 cylinder and 600 cone fuzz faces, every corpus plane, cylinder and cone face at both steps).
+- N3 Codex round 3 (owner contract decisions C1-C3, 2026-11-27, replacing the r1/r2 H1 and M1/M3 rules where they
+  conflict): C1 identifications are exact: a D1 merge only of cut points whose lifted 3D points are bitwise equal, a
+  chain cancellation only with both lifted ends bitwise equal, coedge ends meeting bitwise; otherwise `TRIM_INVALID`
+  (new text); the `A_face`-based `d + L` gate is removed and `trim_sag_bound` carries no identification term. C2
+  translation invariance is not a requirement (a placement-dependent refusal is allowed; known limit: tripod skins
+  moved by 1e4 or more are partly refused). C3 no orientation margin: a lifted triangle is kept only if certifiably
+  positive over its footprint (exact normal; on a cylinder or cone a rational enclosure of the support normal with
+  fixed-point cosine/sine enclosures), a triangle with an exactly zero normal is DROPPED from `triangles` and counted
+  in `degenerate_count` (field meaning changed; dropped only when the kept triangles cover it, else `TRIM_INVALID`,
+  new text), anything else is a fold. The ring cap is checked before the ring list is built. Changed results vs
+  692e819: the grid-aligned polygon400_holes20 (both steps) and 7 of the 1200 planar fuzz faces (all in the private
+  ulp-slab "extra" mode) are refused; 59 planar, 37 cylinder and 20 cone fuzz faces lose their zero-area triangles from
+  `triangles` (everything else identical); tripod skins, the 400-face cylinder and every other corpus face unchanged.
+- N3 Codex round 4 (owner standing approval, recommended option): a global injectivity certificate of the lift
+  replaces chart-only reasoning for 3D non-overlap (Codex r4 H1: a notch narrower than the chord deviation, accepted
+  with two lifted triangles covering one patch). A projection P back to the chart (plane: the float frame's linear
+  projection; cylinder and cone: azimuth and axial coordinate in the float axis frame, all as exact rationals) must
+  map the published mesh injectively: every published triangle's P-image positively oriented (on a cone `n . c`,
+  not the support normal), the P-image of the lifted boundary a set of disjoint simple closed curves (exact
+  predicates on the projected curves after a bounding-box sweep), exactly one loop positive. Otherwise `TRIM_INVALID`
+  (new texts: "the lifted boundary is not simple", "not nested as the trim's", "a lifted triangle's projection back
+  to the chart is not positively oriented", a point too close to the axis). The cylinder and cone test oracles check
+  P-image overlap exactly. No change on the bit-identity sets vs 5c4d38c (planar fuzz and corpus, cylinder and cone
+  fuzz, every corpus plane, cylinder and cone face at both steps; tripod skins and the 400-face cylinder accepted).
+
+- N3 Codex round 5 (owner standing approval, recommended option): the lift's magnitude domain is symmetric (Codex r5
+  H1: a cone of height `float max` overflowed `height |axis|`, its slope became 0, and a face was accepted with an
+  understated `deviation_bound` and a folded triangle). Every ring-point coordinate and stored support number (origin,
+  axis, plane vectors, stored frame directions, radii, height, sweep, start angle) must be finite and at most `2**200`
+  in magnitude, else `OUT_OF_DOMAIN` ("a coordinate or support parameter is above 2**200 in magnitude, or not finite
+  (the lift's domain)"); a non-finite or underflowed cone slope or face tolerance is `OUT_OF_DOMAIN` too ("a derived
+  quantity of the lift is not finite, ..."; the docs' audit table shows every derived float quantity finite inside
+  the domain, the largest below `2**894`). Speed of the round-4 injectivity certificate restored without changing
+  any output: a scalar path for faces of at most 40 mesh points, exact normals shared between Q7 and the projection
+  check, Q7's tight filter and a separating-axis filter on planes. No change on the
+  bit-identity sets vs 75c52fc (planar, cylinder and cone fuzz and every corpus face at both steps; tripod skins and the
+  400-face cylinder accepted). Timing vs 5c4d38c (loaded PC, totals): 400-face cylinder +5 / +6 %, polygon400 +12 / +2
+  %, tripod +10 / +10 % (round 4: +13 / +16, +19 / +8, +8 / +13 %).
+- N3 Codex round 8 (owner decision, option A): the lift runs only for a support of exact type `Plane`, `Cylinder` or
+  `Cone` (a subclass is `SUPPORT_UNSUPPORTED`, also for the supports beside the face's edges, which N1 reads), whose
+  declared fields (and a cylinder's or cone's `_circumferential`) are read once and are exactly `float` or a
+  float64 array of shape (3,), else `OUT_OF_DOMAIN`; no conversion (Codex r8 H1 copy hook certified another plane,
+  M1/M2 raw `TypeError`, L1 mislabelled `TRIM_INVALID`). The r7 normalisation and the `TypeError` catch are
+  removed. Changed results vs 06db3c5: int, `Fraction`, NumPy-scalar and list fields (accepted in r7) are
+  `OUT_OF_DOMAIN`; subclasses are `SUPPORT_UNSUPPORTED`; ordinarily built supports unchanged.
+- N3 Codex round 9 (owner decision, recommended option): the exact-type test of a support compares classes by
+  identity (a subclass with an unhashable metaclass is `SUPPORT_UNSUPPORTED`, not a raw `TypeError`); the
+  incident-face preflight calls the model under N1's own model error state, and a failing model lookup there is
+  `SUPPORT_UNSUPPORTED`. Hostile `GeometryModel` subclasses are outside the contract, like hostile supports.
+  Round 10: a lazy lookup is materialised inside that call. No change for ordinary models and supports.
+- N3 full-suite fix (2026-11-27): every three-term dot in the lift is written out left to right (`_dot3`), so
+  none goes through BLAS (Accelerate's dot is not repeatable across memory offsets on Intel macOS: main's 0.4.7
+  quadrature gate flagged the cylinder `reach`); the round-2 L2 test reads its old module from a vendored copy
+  (`tests/data/display_lift_ee0bc2c.py.txt`), not git history. Bit-identical on this platform (fuzz and corpus).
+- N3 Codex round 7 (owner standing approval, recommended option): the magnitude guard covers exactly the declared
+  fields of the base support class (Plane, Cylinder, Cone), not every attribute of the instance (Codex r7 M1/L1: a
+  ragged stored attribute of a subclass raised a raw `ValueError`; `2**201` or a number beside a string bypassed
+  the guard); a subclass's extra attributes are never read and cannot change the outcome. Each guarded field is
+  converted to binary64 first (int, Fraction, NumPy scalars; an int too large for a float, ragged, string, `None`,
+  complex or object fields are `OUT_OF_DOMAIN` with fixed text, never a raw exception); the lift's handler also
+  catches `TypeError`. Audit table of caller-data conversions in the docs. Changed results vs 6f2cfa7: none on
+  the bit-identity sets; Codex's subclass faces are accepted as the plain plane.
+- N3 Codex round 6 (owner standing approval, recommended option): the scalar fast path of the injectivity
+  certificate gives exactly the array path's decision and values (Codex r6 M1: the stdlib `hypot` was an ulp above
+  `np.hypot` at the strict near-axis cutoff, so one path accepted and the other refused the same face): hypot,
+  atan2, round, cos and sin use NumPy's primitives on one short array, the dot products are explicit in both paths;
+  a differential test and script (fast path on and off) show 0 mismatches over every fuzz and corpus face. The
+  upper magnitude guard covers every stored numeric field of Plane, Cylinder and Cone, derived from the instance
+  (Codex r6 L1: `Cylinder.height` `2**201` was accepted; now `OUT_OF_DOMAIN`). Changed results vs 17c0de7: the Codex
+  M1 face is refused (`TRIM_INVALID`) on both paths; no other face of the bit-identity sets changes.
 - N2 round 8 (docs and tests only; supersedes the N3 wording of rounds 3-7 below): N2's contract states only what N2 guarantees (certified 2D
   mesh, closure coverage, `cut_ends`/`cut_fraction` as provenance, input/trust model, refusals,
   area, budgets) plus one sentence: lifting onto a support is N3's contract and N3 must not rely on
