@@ -1528,3 +1528,9 @@ Owner decision (via the coordinator, the recommended option):
   depend on ambient state or raise) are outside the contract, like hostile supports; the lift fails closed where it
   calls the model itself, and N1's own calls keep N1's contract. No result changes for an ordinary model.
 
+Codex round 10 (R10, Medium): a lazy `faces_using_edge` (a generator) was iterated outside the wrapper, after N1's
+error state was restored, and could raise a raw exception. Fix (owner decision): the lookup is materialised
+(`tuple(...)`) inside the `_model_call` and its `try`, so iteration runs under N1's state and fails closed. Owner
+decision: no further review rounds on hostile-model variants; A5 holds that a hostile `GeometryModel` or support
+subclass may still raise elsewhere (N1 has the same exposure), and it is not a defect of the lift.
+

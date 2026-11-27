@@ -532,7 +532,9 @@ def _check_incident_supports(model, face_id, loops):
             # lookup that fails here is a typed refusal (a hostile or broken GeometryModel subclass
             # is outside the contract, docs)
             try:
-                others = dt._model_call(model.faces_using_edge, use.edge)
+                # materialised inside the call (Codex N3 r10): a lazy lookup is iterated under N1's
+                # error state and its failures are refused here too
+                others = dt._model_call(lambda edge: tuple(model.faces_using_edge(edge)), use.edge)
             except Exception:                                                # untrusted model: fail closed
                 raise _refuse("SUPPORT_UNSUPPORTED", face_id,
                               f"the model's face lookup for edge {dt._id_text(use.edge)} failed") from None
