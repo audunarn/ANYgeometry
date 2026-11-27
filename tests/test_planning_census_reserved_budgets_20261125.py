@@ -252,6 +252,7 @@ def test_the_table_registers_exactly_the_four_caches_at_their_reviewed_limits():
         assert rows[path][0] == CACHES[path][2] and rows[path][1] == _limit(path)
 
 
+@numpy_profile_test
 def test_trig_cache_stays_a_declined_store_and_a_full_one_still_declines():
     _fresh_process_check('t._check_trig_cache_declined_store()')
 
