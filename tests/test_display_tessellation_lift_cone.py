@@ -84,11 +84,10 @@ def _check_cone(model, face, tol, mesh, grid=C.GRID_33, every=1):
             lo, hi = min(ths), max(ths)
             pc = mesh.sense * sum(nn * x for nn, x in zip(n, e1))
             qc = mesh.sense * sum(nn * y for nn, y in zip(n, e2))
-            if not C._footprint_minimum(pc, qc, -mesh.sense * k * na, lo, hi) > 0:
+            minimum = C._footprint_minimum(pc, qc, -mesh.sense * k * na, lo, hi)
+            if not minimum > 0:
                 folded += 1
-                width = mp.sqrt(sum(x * x for x in n)) / max(
-                    mp.sqrt(sum((y - x) ** 2 for x, y in zip(u, v))) for u, v in ((p, q), (q, s), (s, p)))
-                assert width <= mesh.deviation_bound, "a folded triangle is not rounding-thin"
+                C._check_exempt(n, minimum, k, (p, q, s), mesh)
         assert worst <= bound, (float(worst), mesh.deviation_bound)
     assert folded <= mesh.degenerate_count
     return mesh

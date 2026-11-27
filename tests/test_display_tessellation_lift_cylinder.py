@@ -119,14 +119,27 @@ def _check_cylinder(model, face, tol, mesh, grid=GRID_33, every=1):
             lo, hi = min(ths), max(ths)
             pc = mesh.sense * sum(nn * x for nn, x in zip(n, e1))
             qc = mesh.sense * sum(nn * y for nn, y in zip(n, e2))
-            if not _footprint_minimum(pc, qc, mp.mpf(0), lo, hi) > 0:
+            minimum = _footprint_minimum(pc, qc, mp.mpf(0), lo, hi)
+            if not minimum > 0:
                 folded += 1
-                width = mp.sqrt(sum(x * x for x in n)) / max(
-                    mp.sqrt(sum((y - x) ** 2 for x, y in zip(u, v))) for u, v in ((p, q), (q, s), (s, p)))
-                assert width <= mesh.deviation_bound, "a folded triangle is not rounding-thin"
+                _check_exempt(n, minimum, 0, (p, q, s), mesh)
         assert worst <= bound, (float(worst), mesh.deviation_bound)
     assert folded <= mesh.degenerate_count
     return mesh
+
+
+def _check_exempt(n, minimum, k, corners, mesh):
+    """A triangle whose exact footprint minimum is not positive passes only under the module's
+    exact exemption rule (Codex N3 r2 L2): an exactly zero normal, or a minimum within the stated
+    margin of the normal's magnitude, ``2 x 32 eps (1 + |k|) |n|`` (the module's margin around its
+    own float evaluation), and rounding-thin; never just because its width fits deviation_bound."""
+    size = mp.sqrt(sum(x * x for x in n))
+    if size == 0:
+        return
+    assert minimum >= -64 * mp.mpf(2) ** -52 * (1 + abs(k)) * size, ("exemption rule", float(minimum), float(size))
+    p, q, s = corners
+    width = size / max(mp.sqrt(sum((y - x) ** 2 for x, y in zip(u, v))) for u, v in ((p, q), (q, s), (s, p)))
+    assert width <= mesh.deviation_bound, "a folded triangle is not rounding-thin"
 
 
 # ----------------------------------------------------------------------------- fixtures

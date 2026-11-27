@@ -44,10 +44,9 @@ by ``2 alpha |c|``.  ``deviation_bound = max over triangles of max_i delta_i (1 
 Orientation (Q7): on a plane the support normal is constant, so the sign holds over a triangle's
 whole footprint iff it holds once: ``nT . (sense n) > (16 eps + 2 alpha) |d1| |d2|`` (``nT = d1 x
 d2`` computed from the stored vertices; the differences, the cross product, the dot and the
-frame's tilt each round by at most a few eps of ``|d1| |d2|``).  A triangle whose 3D width
-``|nT| / longest edge`` is at most ``A_face`` and that this test cannot certify is decided exactly
-(M1, :func:`_thin_plane`); only an exactly zero normal is exempt and counted in
-``degenerate_count``.
+frame's tilt each round by at most a few eps of ``|d1| |d2|``).  A triangle this test cannot
+certify is decided by a tight filter, else exactly (M1, :func:`_plane_orientation`); only an
+exactly zero normal is exempt and counted in ``degenerate_count``.
 
 Cylinder (N3b).  Chart ``c = (theta, h)``: ``h = (P - o).a`` (``a`` the normalised stored axis),
 ``theta = atan2((P - o).e2, (P - o).e1)`` unwrapped along each ring (each step reduced into
@@ -114,8 +113,8 @@ above a margin ``m >= 0`` is an arc shorter than pi, so on a footprint ``[theta_
 narrower than pi the minimum exceeds ``m`` iff both end values do (an interval with both ends in
 that arc cannot contain its complement, longer than the interval).  Checked as ``sense n .
 c(theta_end) > 40 eps |d1| |d2|`` at both ends (the cross product, the frame and the trigonometric
-values each round by a few eps of ``|d1| |d2|``); a footprint of pi or more is refused.  Rounding-
-thin triangles (3D width at most ``A_face``) the test cannot certify are decided exactly (M1).
+values each round by a few eps of ``|d1| |d2|``); a footprint of pi or more is refused.  Every
+triangle the test cannot certify is decided exactly (M1, :func:`_thin_curved`).
 
 Cone (N3c).  ``S*(theta, h) = o + rho(h) c(theta) + h a*``, ``rho = r0 + k h``, ``k = (r1 - r0) /
 (height |axis|)``; ``A_face`` as the cylinder's with ``rho_max`` for ``r`` plus the rounding of
@@ -132,14 +131,26 @@ Azimuth join (E2): on a cone the azimuth's rounding uses the smallest ``rho`` at
 
 Codex round 1 (owner decisions H1, M1-M4, L1).  H1: a D1 merge and the chain cancellation it
 allows must hold in 3D: the merge distance ``d`` plus the cancelled chord length ``L``
-(:func:`_identification`) is added to ``trim_sag_bound`` and must not exceed T_face.  M1: a
-rounding-thin triangle the float sign test cannot certify is decided from its exact normal
-(:func:`_thin_plane`, :func:`_thin_curved`); exempt only a zero normal or, on a curved support, a
+(:func:`_identification`) is added to ``trim_sag_bound`` (and, round 2, must not exceed
+``A_face``).  M1: a triangle the float sign test cannot certify is decided from its exact normal
+(:func:`_plane_orientation`, :func:`_thin_curved`); exempt only a zero normal or, on a curved support, a
 footprint minimum within the support normal's rounding.  M2: the cut points' rounding
 (:func:`_cut_rounding`) is in ``trim_sag_bound``.  M3: where the world-scaled bound exceeds
 T_face, an origin-relative bound (and on a plane an exact rational decision,
 :meth:`_PlaneChart.exact_bound`) decides; a face the first bound accepts is unchanged.  M4: N2's
 ring caps are enforced while the rings are sampled (:func:`_ring`).
+
+Codex round 2 (owner decisions H1, H2, M1-M3, L1-L3, P1; docs "Codex round 2").  H1: an
+identification is allowed only within the rounding allowance ``A_face`` (no boundary gap beyond
+rounding).  H2: on a cylinder or cone the rings' unwrapped azimuth extent must be certifiably
+below 2 pi (:func:`_check_extent`; the chart -> 3D map is then injective).  M1/M2: the magnitude
+domain (:func:`_check_magnitudes`, nonzero magnitudes at least ``2^-200``), bound norms that never
+underflow (:func:`_norms`), every float orientation filter routing what it cannot certify to an
+exact decision, the exact normal normalised by a power of two (:func:`_thin_curved`), exact ->
+binary64 conversions rounded up (:func:`_sqrt_up`).  M3: the E2 threshold from support-frame
+magnitudes plus the projected representation (:meth:`_CylinderChart.reach`).  L1: the exact plane
+decision by squared comparison (:func:`_sign_two_roots`).  L3: budgets before the seam scan.  P1:
+the planar exact orientation behind a tight vectorised filter (:func:`_plane_orientation`).
 """
 from __future__ import annotations
 
@@ -169,6 +180,10 @@ _TWO_PI = 2.0 * math.pi
 _SNAP = 16.0 * 2.0 ** -52
 #: bisection rounds of the slabs holding a triangle over T_face (at most 2^8 sub-slabs each)
 _REFINE_ROUNDS = 8
+#: the lift's magnitude domain (Codex N3 r2 M1/M2): every nonzero ring-point coordinate and support
+#: parameter is at least this in magnitude (N1 bounds them above by MAX_DISPLAY_COORDINATE)
+_MIN_MAGNITUDE = 2.0 ** -200
+_TINY_NORMAL = 2.0 ** -1022
 
 # fixed refusal texts (owner decision N2 r5 (1); TRIM_INVALID covers both bad trims and
 # uncertifiable lifts, distinguished here: owner decision 2026-11-26, REFUSAL_CODES unchanged)
@@ -185,7 +200,108 @@ _DEVIATION = "a lifted triangle's deviation bound exceeds the face tolerance (li
 _ARITHMETIC = "an arithmetic error in the lift"
 _WINDS = "a loop winds around the support's axis"
 _IDENTIFY = ("merged cut points, or the boundary interval their merge cancels, lie apart in 3D by more than the "
-             "face tolerance (lift not certified)")
+             "rounding allowance (lift not certified: a gap in the trim)")
+_EXTENT = "the trim's azimuth extent is not certifiably below 2 pi (the support would be covered twice)"
+
+
+def _magnitude_text(face_id):
+    return (f"face {dt._id_text(face_id)}: a nonzero coordinate or support parameter is below 2**-200 in magnitude "
+            f"(the lift's domain)")
+
+
+# ----------------------------------------------------------------------------- arithmetic helpers
+def _norms(v):
+    """Row norms of an (n, 3) array, ``sqrt(sum v^2)`` bit for bit wherever the sum of squares is
+    normal; a row whose squares may underflow is scaled by an exact power of two first and its
+    norm, if subnormal, raised by two ulps (an upper bound to a few eps, never 0 for a nonzero
+    row: Codex N3 r2 M1/M2)."""
+    s = np.sum(v * v, axis=1)
+    out = np.sqrt(s)
+    if not len(s) or s.min() >= 2.0 ** -960:          # the common case (NaN takes the slow path)
+        return out
+    low = ~(s >= 2.0 ** -960)
+    if bool(np.any(low)):
+        rows = v[low]
+        top = np.max(np.abs(rows), axis=1)
+        nonzero = top > 0.0
+        _, e = np.frexp(np.where(nonzero, top, 1.0))
+        scaled = np.ldexp(rows, -e[:, None])
+        value = np.ldexp(np.sqrt(np.sum(scaled * scaled, axis=1)), e)
+        value = np.where(value < _TINY_NORMAL, np.nextafter(np.nextafter(value, np.inf), np.inf), value)
+        out[low] = np.where(nonzero, value, 0.0)
+    return out
+
+
+def _sign(x) -> int:
+    return (x > 0) - (x < 0)
+
+
+def _sign_root(a, b, p) -> int:
+    """The exact sign of ``a + b sqrt(p)`` (rationals, ``p >= 0``)."""
+    sa, sb = _sign(a), (_sign(b) if p > 0 else 0)
+    if sb == 0 or sa == sb:
+        return sa if sa else sb
+    if sa == 0:
+        return sb
+    t = _sign(a * a - b * b * p)
+    return sa if t > 0 else (sb if t < 0 else 0)
+
+
+def _sign_two_roots(a, b, p, c, q) -> int:
+    """The exact sign of ``a + b sqrt(p) + c sqrt(q)`` (rationals, ``p, q >= 0``): the sign of
+    ``g = a + b sqrt(p)`` against ``c sqrt(q)``, comparing squares where they differ in sign
+    (``g^2 - c^2 q = (a^2 + b^2 p - c^2 q) + 2 a b sqrt(p)``)."""
+    sg, sc = _sign_root(a, b, p), (_sign(c) if q > 0 else 0)
+    if sc == 0 or sg == sc:
+        return sg if sg else sc
+    if sg == 0:
+        return sc
+    t = _sign_root(a * a + b * b * p - c * c * q, 2 * a * b, p)
+    return sg if t > 0 else (sc if t < 0 else 0)
+
+
+def _sqrt_up(x) -> float:
+    """A binary64 upper bound of ``sqrt(x)`` (``x >= 0`` rational), within two ulps: the integer
+    square root at 64 bits or more below the leading bit, then correctly rounded division and one
+    step up; a positive ``x`` never gives 0 (Codex N3 r2 M2: no exact -> binary64 conversion of a
+    bound rounds down)."""
+    if x <= 0:
+        return 0.0
+    n, d = x.numerator, x.denominator
+    shift = max(0, (130 - n.bit_length() + d.bit_length()) // 2 + 1)
+    root = math.isqrt((n << (2 * shift)) // d) + 1          # sqrt(x) 2^shift < root
+    value = root / (1 << shift) if shift < 1074 else float(Fraction(root, 1 << shift))
+    return math.nextafter(value, math.inf)
+
+
+def _exact_normals(points, rows):
+    """The exact cross products ``(b - a) x (c - a)`` of the stored points of the triangles
+    ``rows``, as Python integers over one common power-of-two scale ``q^2`` (the points as integers
+    over ``q``: the sign and every ratio are the exact ones).  Returns ``(normals, edges2, q)`` with
+    ``edges2`` each triangle's largest squared edge in the same integers (scale ``q^2``)."""
+    used = np.unique(rows)
+    values = points[used].ravel().tolist()
+    ints, q = _integers(values)
+    at = {int(u): (ints[3 * i], ints[3 * i + 1], ints[3 * i + 2]) for i, u in enumerate(used.tolist())}
+    normals, edges2 = [], []
+    for i, j, l in rows.tolist():
+        (ax, ay, az), (bx, by, bz), (cx, cy, cz) = at[i], at[j], at[l]
+        ux, uy, uz, vx, vy, vz = bx - ax, by - ay, bz - az, cx - ax, cy - ay, cz - az
+        normals.append((uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx))
+        wx, wy, wz = cx - bx, cy - by, cz - bz
+        edges2.append(max(ux * ux + uy * uy + uz * uz, vx * vx + vy * vy + vz * vz, wx * wx + wy * wy + wz * wz))
+    return normals, edges2, q
+
+
+def _normalised(n):
+    """An integer vector scaled by an exact power of two so that its largest component lies in
+    [1, 4), as floats (correctly rounded; components far below the largest may be subnormal):
+    the direction to half an ulp per component, never underflowing to zero (scale-invariant)."""
+    top = max(abs(x) for x in n)
+    shift = top.bit_length() - 2
+    if shift >= 0:
+        return [x / (1 << shift) for x in n]
+    return [float(x << -shift) for x in n]
 
 
 def _refuse(code, face_id, text):
@@ -261,6 +377,46 @@ def _ring(model, face_id, loop, tol, budget=None) -> _Ring:
         if not np.array_equal(here[-1], there[0]):
             raise _invalid(face_id, _GAP)
     return _Ring(np.vstack([p[:-1] for p in pieces]), np.vstack(sources), edges, allowance)
+
+
+def _support_parameters(support):
+    """The support's numbers the lift computes with (origin, vectors, radii, height)."""
+    if isinstance(support, Plane):
+        return [*support.origin, *support.u_vector, *support.v_vector]
+    if isinstance(support, Cylinder):
+        return [*support.origin, *support.axis, support.radius]
+    return [*support.origin, *support.axis, support.radius_start, support.radius_end, support.height]
+
+
+def _check_magnitudes(face_id, support, rings):
+    """The lift's magnitude domain (Codex N3 r2 M1/M2, docs): every nonzero ring-point coordinate
+    and support parameter is at least ``2^-200`` in magnitude (N1 bounds them above), else
+    ``OUT_OF_DOMAIN``.  Then a nonzero difference of two such numbers is at least ``2^-253`` and a
+    product of up to four of them is normal, so the float filters' and bounds' relative error
+    analyses hold; what still underflows (derived quantities) is decided exactly or bounded by
+    :func:`_norms`."""
+    values = np.abs(np.concatenate([r.points.ravel() for r in rings]
+                                   + [np.asarray(_support_parameters(support), dtype=float)]))
+    if bool(np.any((values > 0.0) & (values < _MIN_MAGNITUDE))):
+        raise dt.DisplayDomainRefused(_magnitude_text(face_id))
+
+
+def _check_extent(face_id, charts, radius, reach):
+    """H2 (Codex N3 r2): the combinatorial certificate is a statement about the chart, and the
+    exact map ``S*`` of a cylinder or cone is injective only on a strip of azimuth width below
+    2 pi.  Every mesh chart point's azimuth lies between the rings' (cut points on ring chords,
+    slab lines strictly inside the rings' range), so the unwrapped extent of the rings, raised by
+    twice E2's azimuth rounding (``radius`` the smallest support radius at the ring points,
+    ``reach`` the largest ``|P - o|``), must be below 2 pi, else ``TRIM_WINDS_SUPPORT`` (a
+    zero-winding loop over more than a turn).  Then distinct chart points have distinct support
+    points, and the certified chart covering (no overlap, Q2) maps to a covering of the face's
+    part of the support without a second sheet; the lifted mesh is within ``deviation_bound`` of
+    it pointwise (docs, "Injectivity")."""
+    theta = np.concatenate([c[:, 0] for c in charts])
+    lo, hi = float(theta.min()), float(theta.max())
+    rounding = 2.0 * _SNAP * (max(1.0, abs(lo), abs(hi)) + reach / radius)
+    if not (hi - lo) + rounding < _TWO_PI * (1.0 - 4.0 * _EPS):
+        raise _refuse("TRIM_WINDS_SUPPORT", face_id, _EXTENT)
 
 
 def _check_loops(face_id, loops):
@@ -603,8 +759,7 @@ def _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure=N
 
 def _cut_rounding(start, finish):
     """``4 eps |(|A| + |B|)|`` over the cut points' chords, raised for its own rounding (M2)."""
-    span = np.abs(start) + np.abs(finish)
-    return float(np.sqrt(np.sum(span * span, axis=1)).max()) * 4.0 * _EPS * (1.0 + 8.0 * _EPS)
+    return float(_norms(np.abs(start) + np.abs(finish)).max()) * 4.0 * _EPS * (1.0 + 8.0 * _EPS)
 
 
 def _identification(ring_points, cuts, representative, tails, heads):
@@ -618,14 +773,14 @@ def _identification(ring_points, cuts, representative, tails, heads):
     ring ends at nodes of that ring's remaining chain; a ring whose whole chain cancels is refused
     by :func:`_combinatorial`).  So every lifted chord point is within ``d + L`` of the mesh
     boundary and every boundary point within ``d`` of a chord: ``d + L`` is added to
-    ``trim_sag_bound`` and must not exceed T_face (else ``TRIM_INVALID``).  Both measured on the
+    ``trim_sag_bound`` and must not exceed the face's rounding allowance ``A_face`` (Codex N3 r2
+    H1: Q8's "crack-free to rounding" wins over T_face and the sag; else ``TRIM_INVALID``).  Both measured on the
     computed points (the cuts' own rounding is ``cut_rounding``), raised for the rounding of the
     differences, norms and sum."""
     points = np.vstack((ring_points, cuts))
     moved = representative != np.arange(len(points))
-    d = (float(np.sqrt(np.sum((points[moved] - points[representative[moved]]) ** 2, axis=1)).max())
-         if bool(np.any(moved)) else 0.0)
-    length = float(np.sum(np.sqrt(np.sum((points[tails] - points[heads]) ** 2, axis=1)))) if len(tails) else 0.0
+    d = float(_norms(points[moved] - points[representative[moved]]).max()) if bool(np.any(moved)) else 0.0
+    length = float(np.sum(_norms(points[tails] - points[heads]))) if len(tails) else 0.0
     return (d + length) * (1.0 + 8.0 * _EPS + 4.0 * _EPS * (len(tails) + 1))
 
 
@@ -648,7 +803,15 @@ class _PlaneChart:
         self.alpha = 8.0 * _EPS / (sine * (1.0 - 1.0e-3)) + 16.0 * _EPS
         self._exact = tuple([Fraction(float(x)) for x in vec] for vec in (self.o, u, v))
         eu, ev = self._exact[1], self._exact[2]
-        self.exact_normal = (eu[1] * ev[2] - eu[2] * ev[1], eu[2] * ev[0] - eu[0] * ev[2], eu[0] * ev[1] - eu[1] * ev[0])
+        exact = (eu[1] * ev[2] - eu[2] * ev[1], eu[2] * ev[0] - eu[0] * ev[2], eu[0] * ev[1] - eu[1] * ev[0])
+        scale = math.lcm(*(x.denominator for x in exact))
+        #: u x v exactly, as integers (a positive multiple): the sign reference of Q7 on a plane
+        self.exact_normal = tuple(int(x * scale) for x in exact)
+        # u x v in floats and a bound of each component's error (a 2 x 2 determinant of the stored
+        # vectors: Shewchuk's ccwerrboundA without the differences, which are exact here)
+        self.normal_f = np.array([u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]])
+        self.normal_error = _ORIENT_BOUND * np.array([abs(u[1] * v[2]) + abs(u[2] * v[1]), abs(u[2] * v[0]) + abs(u[0] * v[2]),
+                                                      abs(u[0] * v[1]) + abs(u[1] * v[0])]) + _UNDERFLOW
 
     def chart(self, points):
         d = points - self.o
@@ -659,13 +822,13 @@ class _PlaneChart:
     def offsets(self, points, chart):
         """``delta_i = |X_i - S(c_i)|`` computed (the plane frame's own map)."""
         mapped = self.o + chart[:, :1] * self.e1 + chart[:, 1:] * self.e2
-        return np.sqrt(np.sum((points - mapped) ** 2, axis=1))
+        return _norms(points - mapped)
 
     def rounding(self, points, chart):
         """``A_face`` (module docstring)."""
-        size = float(np.sqrt(np.sum(points ** 2, axis=1)).max())
+        size = float(_norms(points).max())
         extent = float(np.ptp(points, axis=0).max())
-        reach = float(np.sqrt(np.sum(chart ** 2, axis=1)).max())
+        reach = float(_norms(chart).max())
         return 16.0 * _EPS * (dt._norm(self.o) + size + extent) + 2.0 * self.alpha * reach
 
     def local_bounds(self, points, chart):
@@ -678,19 +841,23 @@ class _PlaneChart:
         in ``1 + 8 eps``.  No world-scale term: a face's decision does not depend on where it is."""
         w = points - self.o
         mapped = chart[:, :1] * self.e1 + chart[:, 1:] * self.e2
-        delta = np.sqrt(np.sum((w - mapped) ** 2, axis=1))
-        size = float(np.sqrt(np.sum(w ** 2, axis=1)).max())
-        reach = float(np.sqrt(np.sum(chart ** 2, axis=1)).max())
+        delta = _norms(w - mapped)
+        size = float(_norms(w).max())
+        reach = float(_norms(chart).max())
         return delta * (1.0 + 8.0 * _EPS) + (16.0 * _EPS * (size + reach) + 2.0 * self.alpha * reach)
 
     def exact_bound(self, point, chart_point, limit):
-        """The deviation ``D = |X - S*(c)|`` of one point decided against ``limit`` exactly (M3):
-        ``D^2 = |w|^2 + |c|^2 - 2 c_x (w.u) / sqrt(u.u) - 2 c_y (w.v') / sqrt(v'.v')`` with ``w = X -
-        o`` and ``v' = v - (v.u / u.u) u`` in rationals (``e1* = u / |u|``, ``e2* = v' / |v'|``, the
-        exactly orthonormal frame), the two square roots enclosed in rational intervals of relative
-        width ``2^-bits`` (bits 128, then 512, then 2048).  Returns an upper bound of ``D`` (at most
-        ``limit``) when ``D <= limit`` is proven, ``None`` when ``D > limit`` is proven or the
-        interval cannot decide (fail closed)."""
+        """The deviation ``D = |X - S*(c)|`` of one point decided against ``limit`` exactly (M3;
+        Codex N3 r2 L1/M2).  With ``w = X - o``, ``U = u.u``, ``v' = v - (v.u / U) u``, ``V = v'.v'``
+        (``e1* = u / sqrt(U)``, ``e2* = v' / sqrt(V)``, the exactly orthonormal frame), all
+        rationals: ``D^2 = q + b1 sqrt(U) + b2 sqrt(V)``, ``q = |w|^2 + |c|^2``, ``b1 = -2 c_x (w.u) /
+        U``, ``b2 = -2 c_y (w.v') / V``, and ``D <= limit`` iff ``q - limit^2 + b1 sqrt(U) + b2
+        sqrt(V) <= 0``, decided exactly by comparing squares (:func:`_sign_two_roots`; no
+        square-root enclosure, so equality is decided).  Returns an upper bound of ``D`` (at most
+        ``limit``) when ``D <= limit``, else ``None``.  The bound: rational enclosures of the two
+        square roots, refined until ``D^2``'s enclosure is within ``2^-60`` relative (or 8192
+        bits), and :func:`_sqrt_up` of its upper end (rounded up: a positive distance never
+        becomes 0)."""
         o, u, v = self._exact
         w = [Fraction(float(x)) - y for x, y in zip(point, o)]
         cx, cy = Fraction(float(chart_point[0])), Fraction(float(chart_point[1]))
@@ -698,41 +865,27 @@ class _PlaneChart:
         vu = sum(x * y for x, y in zip(v, u))
         vp = [x - vu / uu * y for x, y in zip(v, u)]
         vv = sum(x * x for x in vp)
-        alpha_ = sum(x * y for x, y in zip(w, u))
-        beta = sum(x * y for x, y in zip(w, vp))
         q = sum(x * x for x in w) + cx * cx + cy * cy
-        t2 = Fraction(limit) ** 2
-        for bits in (128, 512, 2048):
-            lo_terms, hi_terms = q, q
-            for coefficient, base in ((-2 * cx * alpha_, uu), (-2 * cy * beta, vv)):
-                enclosure = _inverse_sqrt(base, bits)           # 1 / sqrt(base) in [low, high]
-                if enclosure is None:
-                    break
-                a, b = coefficient * enclosure[0], coefficient * enclosure[1]
-                lo_terms += min(a, b)
-                hi_terms += max(a, b)
-            else:
-                enclosure = True
-            if enclosure is None:
-                continue
-            if lo_terms > t2:
-                return None
-            if hi_terms <= t2:
-                bound = math.sqrt(float(max(hi_terms, Fraction(0))))
-                bound = math.nextafter(math.nextafter(bound, math.inf), math.inf)
-                return min(float(limit), bound)
-        return None
+        b1 = -2 * cx * sum(x * y for x, y in zip(w, u)) / uu
+        b2 = -2 * cy * sum(x * y for x, y in zip(w, vp)) / vv
+        if _sign_two_roots(q - Fraction(limit) ** 2, b1, uu, b2, vv) > 0:
+            return None
+        for bits in (128, 512, 2048, 8192):
+            lo, hi = q, q
+            for b, base in ((b1, uu), (b2, vv)):
+                low, high = _sqrt_enclosure(base, bits)
+                lo += min(b * low, b * high)
+                hi += max(b * low, b * high)
+            if lo > 0 and hi - lo <= lo * Fraction(1, 1 << 60):
+                break
+        return min(float(limit), _sqrt_up(max(hi, Fraction(0))))
 
 
-def _inverse_sqrt(x, bits):
-    """Rationals ``low <= 1 / sqrt(x) <= high`` (``x > 0`` rational), relative width ~``2^-bits``
-    (``None`` when ``x`` is too small for this precision)."""
+def _sqrt_enclosure(x, bits):
+    """Rationals ``low <= sqrt(x) <= high`` (``x >= 0`` rational), ``high - low = 2^-bits``."""
     scale = 1 << bits
-    n = x.numerator * scale * scale // x.denominator
-    root = math.isqrt(n)                                   # root <= sqrt(x) scale < root + 1 (n floored)
-    if root == 0:
-        return None
-    return Fraction(scale, root + 1), Fraction(scale, root)
+    root = math.isqrt(x.numerator * scale * scale // x.denominator)       # root <= sqrt(x) scale < root + 1
+    return Fraction(root, scale), Fraction(root + 1, scale)
 
 
 def _plane_point_bounds(face_id, plane, points, chart, face_tolerance, rounding, code, text):
@@ -752,55 +905,74 @@ def _plane_point_bounds(face_id, plane, points, chart, face_tolerance, rounding,
     return bounds
 
 
-def _exact_cross(points, rows):
-    """The exact cross products ``(b - a) x (c - a)`` (rationals) of the stored points of the
-    triangles ``rows`` (an (m, 3) index array)."""
-    out = []
-    for i, j, l in rows.tolist():
-        a, b, c = ([Fraction(float(x)) for x in points[t]] for t in (i, j, l))
-        d1 = [y - x for x, y in zip(a, b)]
-        d2 = [y - x for x, y in zip(a, c)]
-        out.append((d1[1] * d2[2] - d1[2] * d2[1], d1[2] * d2[0] - d1[0] * d2[2], d1[0] * d2[1] - d1[1] * d2[0]))
-    return out
+def _plane_orientation(face_id, plane, points, rows, sense):
+    """Q7 on a plane for the triangles ``rows`` the first float filter cannot certify (M1; Codex N3
+    r2 M1, P1): the sign of ``sense (nT . (u x v))``, ``nT`` the exact normal of the stored points,
+    decided by a second, tight filter and else exactly.  Filter: each component of ``nT`` is a
+    2 x 2 orientation of the stored points (Shewchuk's ``ccwerrboundA`` bounds its error, the
+    differences' rounding included, by ``B (|l| + |r|)``), ``u x v`` is the float cross product
+    within ``normal_error`` per component; then ``|computed - exact| <= sum (|N_f| B P + dN (|nT_f|
+    + B P)) + 2 eps sum |N_f nT_f|`` (the dot's own rounding), raised by ``4 eps`` and an underflow
+    slack (the undecided go exact, so the slack only routes).  Exactly (integers over a common
+    power-of-two scale, :func:`_exact_normals`): positive certified, zero normal exempt (counted),
+    anything else a fold (``TRIM_INVALID``).  Returns the exempt count."""
+    a, b, c = points[rows[:, 0]], points[rows[:, 1]], points[rows[:, 2]]
+    d1, d2 = b - a, c - a
+    left = np.column_stack((d1[:, 1] * d2[:, 2], d1[:, 2] * d2[:, 0], d1[:, 0] * d2[:, 1]))
+    right = np.column_stack((d1[:, 2] * d2[:, 1], d1[:, 0] * d2[:, 2], d1[:, 1] * d2[:, 0]))
+    nt = left - right
+    perm = _ORIENT_BOUND * (np.abs(left) + np.abs(right))
+    nf, dn = plane.normal_f, plane.normal_error
+    terms = nt * nf
+    value = sense * terms.sum(axis=1)
+    error = ((perm @ np.abs(nf) + (np.abs(nt) + perm) @ dn + 2.0 * _EPS * np.abs(terms).sum(axis=1))
+             * (1.0 + 4.0 * _EPS) + _UNDERFLOW * (1.0 + float(np.abs(nf).sum())))
+    if bool(np.any(value < -error)):
+        raise _invalid(face_id, _FOLD)
+    rest = np.flatnonzero(~(value > error))
+    if not len(rest):
+        return 0
+    normals, _, _ = _exact_normals(points, rows[rest])
+    reference = plane.exact_normal
+    exempt = 0
+    for n in normals:
+        dot = sense * (n[0] * reference[0] + n[1] * reference[1] + n[2] * reference[2])
+        if dot > 0:
+            continue
+        if n != (0, 0, 0):
+            raise _invalid(face_id, _FOLD)
+        exempt += 1
+    return exempt
 
 
-def _thin_plane(points, rows, plane_normal, sense):
-    """M1 on a plane: the orientation of each thin triangle decided exactly from the stored
-    points, ``sense (nT . (u x v))`` in rationals (the support normal is exactly representable).
-    Returns ``(exempt, folded)`` masks: exempt only for an exactly zero normal."""
-    exempt = np.zeros(len(rows), dtype=bool)
-    folded = np.zeros(len(rows), dtype=bool)
-    for r, n in enumerate(_exact_cross(points, rows)):
-        if n == (0, 0, 0):
-            exempt[r] = True
-        elif not sense * sum(x * y for x, y in zip(n, plane_normal)) > 0:
-            folded[r] = True
-    return exempt, folded
-
-
-def _thin_curved(points, rows, lo, hi, e1, e2, axis, k, sense):
-    """M1 on a cylinder (``k = 0``) or cone: the orientation of each thin triangle over its
-    footprint ``[lo, hi]`` decided from the EXACT normal of its stored points (rationals, then
-    correctly rounded: a relative error of half an ulp per coordinate), not from the world-scaled
-    width test.  The support normal ``c(theta) - k a`` is not representable (a transcendental
-    frame), so ``g(theta) = n . (c(theta) - k a)`` is evaluated with the module's frame and
-    decided against the margin ``m = 32 eps (1 + |k|) |n|``: the normal's rounding (eps / 2), the
-    frame (``2 FE``, 8 eps), the cosine and sine (an ulp each), the dot products and the sum
-    (6 eps), each times ``(1 + |k|)``.  Positive over the footprint (both ends above ``m``; on a
-    cone also the sinusoid's minimum where it may lie inside): certified, not exempt.  A value
-    below ``-m`` (a fold the stored floats decide) or a footprint of pi or more: folded.  Exempt
-    (counted in ``degenerate_count``) only an exactly zero normal or a footprint minimum within
-    ``[-m, m]`` (the sign is undecidable because the support normal is not representable).
-    Returns ``(exempt, folded)`` masks."""
+def _thin_curved(points, rows, lo, hi, e1, e2, axis, k, sense, allowance=None):
+    """M1 on a cylinder (``k = 0``) or cone: the orientation of each triangle the float filter
+    cannot certify, over its footprint ``[lo, hi]``, decided from the EXACT normal of its stored
+    points (integers, :func:`_exact_normals`), scaled by an exact power of two so its largest
+    component lies in [1, 4) and then correctly rounded (Codex N3 r2 M1: scale-invariant, no
+    absolute floor, nothing underflows to zero): a relative error of half an ulp per component.
+    The support normal ``c(theta) - k a`` is not representable (a transcendental frame), so
+    ``g(theta) = n . (c(theta) - k a)`` is evaluated with the module's frame and decided against
+    the margin ``m = 32 eps (1 + |k|) |n|``: the normal's rounding (eps / 2), the frame (``2 FE``,
+    8 eps), the cosine and sine (an ulp each), the dot products and the sum (6 eps), each times
+    ``(1 + |k|)``.  Positive over the footprint (both ends above ``m``; on a cone also the
+    sinusoid's minimum where it may lie inside): certified, not exempt.  A value below ``-m`` (a
+    fold the stored floats decide) or a footprint of pi or more: folded.  Exempt (counted in
+    ``degenerate_count``) only an exactly zero normal, or a footprint minimum within ``[-m, m]``
+    (the sign is undecidable because the support normal is not representable) of a triangle
+    whose exact 3D width ``|n| / longest edge`` is at most ``allowance`` (decided exactly; no
+    width limit when ``allowance`` is None); otherwise folded.  Returns ``(exempt, folded)``."""
     exempt = np.zeros(len(rows), dtype=bool)
     folded = np.zeros(len(rows), dtype=bool)
     slack = 1.0 + abs(k)
-    for r, n in enumerate(_exact_cross(points, rows)):
+    normals, edges2, scale = _exact_normals(points, np.asarray(rows))
+    limit = None if allowance is None else Fraction(allowance)
+    for r, n in enumerate(normals):
         if n == (0, 0, 0):
             exempt[r] = True
             continue
-        nf = np.array([float(x) for x in n])
-        margin = 32.0 * _EPS * slack * float(np.sqrt(nf @ nf)) + _UNDERFLOW
+        nf = np.array(_normalised(n))
+        margin = 32.0 * _EPS * slack * float(np.sqrt(nf @ nf))
         p, q = sense * float(nf @ e1), sense * float(nf @ e2)
         level = -sense * k * float(nf @ axis)
         a, b = float(lo[r]), float(hi[r])
@@ -821,8 +993,11 @@ def _thin_curved(points, rows, lo, hi, e1, e2, axis, k, sense):
             low = min(low, bottom)
         if low < -margin:
             folded[r] = True
+        elif limit is None or (sum(x * x for x in n) * limit.denominator ** 2
+                               <= limit.numerator ** 2 * scale * scale * edges2[r]):
+            exempt[r] = True                       # |n|^2 <= A^2 l^2 (integers over q^2, q^2)
         else:
-            exempt[r] = True
+            folded[r] = True
     return exempt, folded
 
 
@@ -844,33 +1019,25 @@ def _lift_plane(model, face_id, tol, support, rings, extra):
     mesh = triangulate_rings(charts, extra)
     # (8) lift by index: ring vertices are N1's points, cut points on the 3D N1 chord
     built = _assemble(face_id, rings, ring_points, charts, ring_chart, mesh)
-    _check_identification(face_id, built, face_tolerance)
     points, chart, triangles, sense = built.points, built.chart, built.triangles, built.sense
+    rounding = plane.rounding(points, chart)
+    _check_identification(face_id, built, rounding)
     # (9) certificates
     if sense < 0:
         triangles = triangles[:, [0, 2, 1]]
-    rounding = plane.rounding(points, chart)
     a, b, c = points[triangles[:, 0]], points[triangles[:, 1]], points[triangles[:, 2]]
     d1, d2 = b - a, c - a
     normal = _cross(d1, d2)
-    size = np.sqrt(np.sum(normal ** 2, axis=1))
-    longest = np.sqrt(np.maximum.reduce([np.sum(d1 ** 2, axis=1), np.sum(d2 ** 2, axis=1),
-                                         np.sum((c - b) ** 2, axis=1)]))
-    thin = ~(size > rounding * longest)                     # 3D width |nT| / longest <= A_face
     lengths = np.sqrt(np.sum(d1 ** 2, axis=1)) * np.sqrt(np.sum(d2 ** 2, axis=1))
     dot = normal @ (sense * plane.n)
-    margin = (16.0 * _EPS + 2.0 * plane.alpha) * lengths
+    margin = (16.0 * _EPS + 2.0 * plane.alpha) * lengths + _UNDERFLOW
     positive = dot > margin                                 # the float filter certifies these
-    if not bool(np.all(thin | positive)):
-        raise _invalid(face_id, _FOLD)
-    # M1: a thin triangle the filter cannot certify is decided exactly; exempt only a zero normal
+    # M1: every triangle the filter cannot certify is decided by a tight filter, else exactly;
+    # exempt only a zero normal (the slack only routes: the undecided go exact)
     exempt_count = 0
-    undecided = np.flatnonzero(thin & ~positive)
+    undecided = np.flatnonzero(~positive)
     if len(undecided):
-        exempt, folded = _thin_plane(points, triangles[undecided], plane.exact_normal, sense)
-        if bool(np.any(folded)):
-            raise _invalid(face_id, _FOLD)
-        exempt_count = int(np.count_nonzero(exempt))
+        exempt_count = _plane_orientation(face_id, plane, points, triangles[undecided], sense)
     bounds = _plane_point_bounds(face_id, plane, points, chart, face_tolerance, rounding, "TRIM_INVALID",
                                  lambda worst: _DEVIATION)
     per_triangle = np.max(bounds[triangles], axis=1)
@@ -882,9 +1049,12 @@ def _lift_plane(model, face_id, tol, support, rings, extra):
                               dt._frozen(built.source), int(sense), face_tolerance, deviation, trim, exempt_count)
 
 
-def _check_identification(face_id, built, face_tolerance):
-    """H1: the D1 identifications may move the lifted boundary by at most T_face."""
-    if not built.identify <= face_tolerance:
+def _check_identification(face_id, built, allowance):
+    """H1 (Codex N3 r1, r2): the D1 identifications may move the lifted boundary by at most the
+    rounding allowance ``A_face`` of the face's mesh points (the allowance that makes T-vertices
+    crack-free to rounding), never merely by T_face or the sag: no accepted mesh has a boundary gap
+    beyond rounding."""
+    if not built.identify <= allowance:
         raise _invalid(face_id, _IDENTIFY)
 
 
@@ -952,10 +1122,10 @@ class _CylinderChart:
         order = np.argsort(joined, kind="stable")
         ordered = joined[order]
         gaps = np.diff(ordered)
-        # the rounding of a computed azimuth: its own (|theta| ulps) and that of the projection,
-        # eps (|P| + |o|) over the radius
-        reach = max(float(np.abs(ring.points).max()) for ring in rings) + float(np.abs(self.o).max())
-        close = gaps <= _SNAP * (np.maximum(1.0, np.abs(ordered[1:])) + reach / radius)
+        # the rounding of a computed azimuth: its own (|theta| ulps) and that of the projection
+        # (:meth:`reach`: the difference P - o and the stored coordinates' representation in the
+        # radial plane, not world reach: Codex N3 r2 M3), over the radius
+        close = gaps <= _SNAP * (np.maximum(1.0, np.abs(ordered[1:])) + self.reach(rings) / radius)
         joined_any = bool(np.any(close))
         if joined_any:
             group = np.concatenate(([0], np.cumsum(~close)))
@@ -971,16 +1141,34 @@ class _CylinderChart:
             raise _invalid(face_id, _RING_COINCIDE)
         return charts
 
+    def reach(self, rings):
+        """The magnitude whose ``eps / radius`` multiple is the rounding of a computed azimuth (E2,
+        H2): the computation from the difference ``P - o`` (``max |P - o|``: support-frame), plus
+        the stored coordinates' own representation (half an ulp of each coordinate of ``P`` and
+        ``o``) projected onto the support's radial plane, ``sum_i (|P_i| + |o_i|) (|e1_i| +
+        |e2_i|)``.  An axial translation along a coordinate axis leaves it unchanged (Codex N3 r2
+        M3); a lateral one coarsens the stored points themselves, which the join must follow
+        (ruling ends then differ by that representation: measured, a window face at a lateral
+        1e3)."""
+        cached = getattr(self, "_reach", None)
+        if cached is not None and cached[0] is rings:
+            return cached[1]
+        weight = np.abs(self.e1) + np.abs(self.e2)
+        local = max(float(np.abs(ring.points - self.o).max()) for ring in rings)
+        stored = max(float(((np.abs(ring.points) + np.abs(self.o)) @ weight).max()) for ring in rings)
+        self._reach = (rings, local + stored)
+        return local + stored
+
     def offsets(self, points, chart):
         """``delta_i = |X_i - S(c_i)|`` computed with the module's frame."""
         theta, h = chart[:, 0], chart[:, 1]
         mapped = (self.o + (self.r * np.cos(theta))[:, None] * self.e1 + (self.r * np.sin(theta))[:, None] * self.e2
                   + h[:, None] * self.a)
-        return np.sqrt(np.sum((points - mapped) ** 2, axis=1))
+        return _norms(points - mapped)
 
     def rounding(self, points, chart):
         """``A_face`` (module docstring)."""
-        size = float(np.sqrt(np.sum(points ** 2, axis=1)).max())
+        size = float(_norms(points).max())
         height = float(np.abs(chart[:, 1]).max())
         return (32.0 * _EPS * (dt._norm(self.o) + self.r + height + size)
                 + 2.0 * dt._FRAME_ERROR * (self.r + height))
@@ -995,13 +1183,13 @@ class _CylinderChart:
         theta, h = chart[:, 0], chart[:, 1]
         rho = self.radius(chart)
         mapped = (rho * np.cos(theta))[:, None] * self.e1 + (rho * np.sin(theta))[:, None] * self.e2 + h[:, None] * self.a
-        return np.sqrt(np.sum((points - self.o - mapped) ** 2, axis=1))
+        return _norms(points - self.o - mapped)
 
     def local_rounding(self, points, chart):
         """``A_loc``: ``A_face`` with ``|o| + max |X|`` replaced by ``W = max |X - o|`` (the
         difference ``X - o`` rounds by half an ulp of its result): the rounding of the cosine, sine,
         products and sums of ``S_loc``, of ``w - S_loc`` and of the frame; no world-scale term."""
-        size = float(np.sqrt(np.sum((points - self.o) ** 2, axis=1)).max())
+        size = float(_norms(points - self.o).max())
         height = float(np.abs(chart[:, 1]).max())
         return 32.0 * _EPS * (self.r + height + size) + 2.0 * dt._FRAME_ERROR * (self.r + height)
 
@@ -1044,7 +1232,7 @@ class _CylinderBound:
             self.rounding = ring_rounding if n == k else cyl.local_rounding(built.points, chart)
             cut = built.cut_rounding
         else:
-            size = float(np.sqrt(np.sum(built.points ** 2, axis=1)).max())
+            size = float(_norms(built.points).max())
             # A_face of the mesh points; without cut points they are the ring's (the same value)
             self.rounding = ring_rounding if n == k else cyl.rounding(built.points, chart)
             cut = 16.0 * _EPS * size
@@ -1092,6 +1280,7 @@ def _lift_cylinder(model, face_id, tol, support, rings, extra):
         face_tolerance = r * (tol.angle + a) ** 2 / 8 + float(model.tolerance.surface_residual)
     charts = cyl.charts(face_id, rings)
     ring_points = np.vstack([ring.points for ring in rings])
+    _check_extent(face_id, charts, r, cyl.reach(rings))
     ring_chart = np.vstack(charts)
     k = len(ring_points)
     # (5) boundary chords: the two-point bound
@@ -1117,8 +1306,8 @@ def _lift_cylinder(model, face_id, tol, support, rings, extra):
     for attempt in range(_REFINE_ROUNDS + 1):
         mesh = triangulate_rings(charts, lines)
         built = _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure)
-        _check_identification(face_id, built, face_tolerance)
         bound = _CylinderBound(cyl, k, ring_deltas, built, ring_rounding)
+        _check_identification(face_id, built, bound.rounding)
         per_triangle, tt, width = bound.per_triangle(built.triangles)
         failing = ~(per_triangle <= face_tolerance)
         if bool(np.any(failing)):
@@ -1140,34 +1329,31 @@ def _lift_cylinder(model, face_id, tol, support, rings, extra):
     a, b, c = points[triangles[:, 0]], points[triangles[:, 1]], points[triangles[:, 2]]
     d1, d2 = b - a, c - a
     normal = _cross(d1, d2)
-    size = np.sqrt(np.sum(normal ** 2, axis=1))
-    longest = np.sqrt(np.maximum.reduce([np.sum(d1 ** 2, axis=1), np.sum(d2 ** 2, axis=1),
-                                         np.sum((c - b) ** 2, axis=1)]))
-    thin = ~(size > bound.rounding * longest)               # 3D width |nT| / longest <= A_face
-    margin = 40.0 * _EPS * np.sqrt(np.sum(d1 ** 2, axis=1)) * np.sqrt(np.sum(d2 ** 2, axis=1))
+    margin = 40.0 * _EPS * np.sqrt(np.sum(d1 ** 2, axis=1)) * np.sqrt(np.sum(d2 ** 2, axis=1)) + _UNDERFLOW
     p = normal @ cyl.e1
     q = normal @ cyl.e2
     lo, hi = tt.min(axis=1), tt.max(axis=1)
     at_lo = sense * (p * np.cos(lo) + q * np.sin(lo))
     at_hi = sense * (p * np.cos(hi) + q * np.sin(hi))
     positive = (at_lo > margin) & (at_hi > margin) & (width < math.pi)
-    if not bool(np.all(thin | positive)):
-        raise _invalid(face_id, _FOLD)
-    exempt_count = _thin_decision(face_id, points, triangles, thin & ~positive, lo, hi, cyl, 0.0, sense)
+    exempt_count = _thin_decision(face_id, points, triangles, ~positive, lo, hi, cyl, 0.0, sense, bound.rounding)
     deviation = float(per_triangle.max())
     trim = _trim_bound(face_id, model, tol, rings, built)
     return dt.FaceDisplayMesh(face_id, dt._frozen(points), dt._frozen(triangles), dt._frozen(chart.copy()), k,
                               dt._frozen(built.source), int(sense), face_tolerance, deviation, trim, exempt_count)
 
 
-def _thin_decision(face_id, points, triangles, undecided, lo, hi, chart, slope, sense):
-    """M1: the thin triangles the float filter cannot certify, decided by :func:`_thin_curved`;
-    a fold refuses, the exempt ones are counted."""
+def _thin_decision(face_id, points, triangles, undecided, lo, hi, chart, slope, sense, allowance):
+    """M1: every triangle the float filter cannot certify (the margin's underflow slack only
+    routes), decided by :func:`_thin_curved`; a fold refuses, the exempt ones are counted.  The
+    rounding-thin width limit is ``A_face`` of the mesh points (decided exactly): the stored
+    points' own representation, world-scaled by nature (a support-frame limit refused rounding
+    slivers of translated faces: measured, frustum with a hole at a lateral 1e5)."""
     rows = np.flatnonzero(undecided)
     if not len(rows):
         return 0
     exempt, folded = _thin_curved(points, triangles[rows], lo[rows], hi[rows], chart.e1, chart.e2, chart.a, slope,
-                                  sense)
+                                  sense, allowance)
     if bool(np.any(folded)):
         raise _invalid(face_id, _FOLD)
     return int(np.count_nonzero(exempt))
@@ -1202,7 +1388,7 @@ class _ConeChart(_CylinderChart):
         rho = self.r0 + self.k * h
         mapped = (self.o + (rho * np.cos(theta))[:, None] * self.e1 + (rho * np.sin(theta))[:, None] * self.e2
                   + h[:, None] * self.a)
-        return np.sqrt(np.sum((points - mapped) ** 2, axis=1))
+        return _norms(points - mapped)
 
     def rho_rounding(self, height):
         """The rounding of a computed ``rho(h) = r0 + k h`` (``k`` itself a few roundings)."""
@@ -1210,7 +1396,7 @@ class _ConeChart(_CylinderChart):
 
     def rounding(self, points, chart):
         """``A_face`` (module docstring, Cone)."""
-        size = float(np.sqrt(np.sum(points ** 2, axis=1)).max())
+        size = float(_norms(points).max())
         height = float(np.abs(chart[:, 1]).max())
         rho = float(np.abs(self.r0 + self.k * chart[:, 1]).max()) + self.rho_rounding(height)
         return (32.0 * _EPS * (dt._norm(self.o) + rho + height + size)
@@ -1221,7 +1407,7 @@ class _ConeChart(_CylinderChart):
 
     def local_rounding(self, points, chart):
         """``A_loc`` (:meth:`_CylinderChart.local_rounding` with ``rho`` and its rounding)."""
-        size = float(np.sqrt(np.sum((points - self.o) ** 2, axis=1)).max())
+        size = float(_norms(points - self.o).max())
         height = float(np.abs(chart[:, 1]).max())
         rho = float(np.abs(self.r0 + self.k * chart[:, 1]).max()) + self.rho_rounding(height)
         return (32.0 * _EPS * (rho + height + size) + 2.0 * dt._FRAME_ERROR * (rho + height)
@@ -1287,7 +1473,7 @@ class _ConeBound:
             self.rounding = ring_rounding if n == k else cone.local_rounding(built.points, chart)
             cut = built.cut_rounding
         else:
-            size = float(np.sqrt(np.sum(built.points ** 2, axis=1)).max())
+            size = float(_norms(built.points).max())
             self.rounding = cone.rounding(built.points, chart)
             cut = 16.0 * _EPS * size
         self.extra = (self.rounding + cut + rho_all * self.kt_max
@@ -1359,6 +1545,7 @@ def _lift_cone(model, face_id, tol, support, rings, extra):
     _check_apex(face_id, model, support, cone, ring_points)
     charts = cone.charts(face_id, rings)
     ring_chart = np.vstack(charts)
+    _check_extent(face_id, charts, float((cone.r0 + cone.k * ring_chart[:, 1]).min()), cone.reach(rings))
     k = len(ring_points)
     # (5) boundary chords: the two-point bound rho dT^2 / 8 + |k| dT dH / 4
     ring_deltas = cone.offsets(ring_points, ring_chart)
@@ -1387,8 +1574,8 @@ def _lift_cone(model, face_id, tol, support, rings, extra):
     for attempt in range(_REFINE_ROUNDS + 1):
         mesh = triangulate_rings(charts, lines)
         built = _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure)
-        _check_identification(face_id, built, face_tolerance)
         bound = _ConeBound(cone, k, ring_deltas, ring_rho, built)
+        _check_identification(face_id, built, bound.rounding)
         per_triangle, tt, width = bound.per_triangle(built.triangles)
         failing = ~(per_triangle <= face_tolerance)
         if bool(np.any(failing)):
@@ -1411,12 +1598,8 @@ def _lift_cone(model, face_id, tol, support, rings, extra):
     a, b, c = points[triangles[:, 0]], points[triangles[:, 1]], points[triangles[:, 2]]
     d1, d2 = b - a, c - a
     normal = _cross(d1, d2)
-    size = np.sqrt(np.sum(normal ** 2, axis=1))
-    longest = np.sqrt(np.maximum.reduce([np.sum(d1 ** 2, axis=1), np.sum(d2 ** 2, axis=1),
-                                         np.sum((c - b) ** 2, axis=1)]))
-    thin = ~(size > bound.rounding * longest)               # 3D width |nT| / longest <= A_face
     margin = (40.0 * _EPS * (1.0 + abs(cone.k)) * np.sqrt(np.sum(d1 ** 2, axis=1))
-              * np.sqrt(np.sum(d2 ** 2, axis=1)))
+              * np.sqrt(np.sum(d2 ** 2, axis=1))) + _UNDERFLOW
     p = sense * (normal @ cone.e1)
     q = sense * (normal @ cone.e2)
     level = -sense * cone.k * (normal @ cone.a)
@@ -1429,9 +1612,7 @@ def _lift_cone(model, face_id, tol, support, rings, extra):
     inside = (-p * sin_lo + q * cos_lo <= margin) & (-p * sin_hi + q * cos_hi >= -margin)
     bottom = level - np.hypot(p, q)
     positive = (at_lo > margin) & (at_hi > margin) & (width < math.pi) & (~inside | (bottom > margin))
-    if not bool(np.all(thin | positive)):
-        raise _invalid(face_id, _FOLD)
-    exempt_count = _thin_decision(face_id, points, triangles, thin & ~positive, lo, hi, cone, cone.k, sense)
+    exempt_count = _thin_decision(face_id, points, triangles, ~positive, lo, hi, cone, cone.k, sense, bound.rounding)
     deviation = float(per_triangle.max())
     trim = _trim_bound(face_id, model, tol, rings, built)
     return dt.FaceDisplayMesh(face_id, dt._frozen(points), dt._frozen(triangles), dt._frozen(chart.copy()), k,
@@ -1451,12 +1632,19 @@ def _lift(model, face_id, tol, *, _extra_x=None):
             raise _refuse("SUPPORT_UNSUPPORTED", face_id, "its support is not a plane, cylinder or cone")
         dt._check_support_domain(support)
         loops = (face.loop, *face.holes)
-        _check_loops(face_id, loops)
         extra = _check_extra(_extra_x)
-        if len(loops) > _slab.MAX_SLAB_RINGS:                  # N2's ring cap, before any sampling
+        # budgets before any scan proportional to the trim (Codex N3 r2 L3): N2's ring cap, then
+        # its ring-point cap against the coedge count (each coedge gives at least one ring point)
+        if len(loops) > _slab.MAX_SLAB_RINGS:
             raise _slab._too_complex(f"{dt._id_text(len(loops))} rings (MAX_SLAB_RINGS = {_slab.MAX_SLAB_RINGS})")
+        coedges = sum(len(loop) for loop in loops)
+        if coedges > _slab.MAX_SLAB_RING_POINTS:
+            raise _slab._too_complex(f"at least {dt._id_text(coedges)} ring points "
+                                     f"(MAX_SLAB_RING_POINTS = {_slab.MAX_SLAB_RING_POINTS})")
+        _check_loops(face_id, loops)
         budget = [0]
         rings = [_ring(model, face_id, loop, tol, budget) for loop in loops]
+        _check_magnitudes(face_id, support, rings)
         try:
             if isinstance(support, Plane):
                 return _lift_plane(model, face_id, tol, support, rings, extra)

@@ -113,8 +113,8 @@ def _check_certified(model, face, tol, mesh, grid_triangles=8):
     assert mesh.trim_sag_bound >= 0.0 and mesh.sense in (1, -1)
     _check_combinatorics(mesh, rings)
     tris = mesh.triangles.tolist()
-    # 3D orientation: every lifted triangle not counted rounding-thin has an exactly positive
-    # normal against sense x (u x v)
+    # 3D orientation: every lifted triangle has an exactly positive normal against sense x (u x v),
+    # or an exactly zero one (exempt, counted)
     n = _cross(_fp(plane.u_vector), _fp(plane.v_vector))
     pts = [_fp(p) for p in mesh.points]
     folded = 0
@@ -122,11 +122,10 @@ def _check_certified(model, face, tol, mesh, grid_triangles=8):
         a, b, c = (pts[i] for i in t)
         nt = _cross([y - x for x, y in zip(a, b)], [y - x for x, y in zip(a, c)])
         if not mesh.sense * sum(x * y for x, y in zip(nt, n)) > 0:
+            # the module's exact exemption rule on a plane: only an exactly zero normal (Codex N3
+            # r2 L2: never just a width within deviation_bound)
             folded += 1
-            lengths = [math.dist(mesh.points[t[i]], mesh.points[t[(i + 1) % 3]]) for i in range(3)]
-            area2 = float(np.linalg.norm(np.cross(mesh.points[t[1]] - mesh.points[t[0]],
-                                                  mesh.points[t[2]] - mesh.points[t[0]])))
-            assert area2 / max(max(lengths), 1e-300) <= mesh.deviation_bound
+            assert nt == (0, 0, 0), "a folded triangle with a nonzero exact normal (exemption rule)"
     assert folded <= mesh.degenerate_count
     # paired deviation (Decimal, 60 digits): the plane map is affine, so the vertex errors bound
     # the triangle; checked at the vertices and at a barycentric grid of the first triangles

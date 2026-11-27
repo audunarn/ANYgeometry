@@ -30,6 +30,19 @@ All notable user-visible changes to ANYgeometry are documented here.
   with cut points, `degenerate_count` (exempt triangles only), planar faces whose thin triangles truly fold through
   slab lines an ulp from a vertex (refused), far-from-origin faces refused by rounding alone (accepted); points and
   triangles of every other accepted face unchanged.
+- N3 Codex round 2 (owner decisions H1, H2, M1-M3, L1-L3, P1, recommended options): a D1 identification and the
+  chain cancellation it allows are accepted only within the rounding allowance `A_face` (Q8 wins: no accepted mesh has
+  a boundary gap beyond rounding; `TRIM_INVALID`, new text); on a cylinder or cone the rings' unwrapped azimuth extent
+  must be certifiably below 2 pi (`TRIM_WINDS_SUPPORT`, new text: a zero-winding loop over more than a turn covered the
+  support twice); a magnitude domain for the lift (every nonzero ring-point coordinate and support parameter at least
+  `2**-200`, else `OUT_OF_DOMAIN`), underflow-safe bound norms, exact orientation decisions without absolute floors
+  (the exact normal scaled by a power of two) for every triangle the float filters cannot certify, and exact-to-binary64
+  bounds rounded up; the E2 azimuth join threshold from support-frame magnitudes plus the stored coordinates'
+  representation projected onto the radial plane (an axial translation changes no decision); the exact plane decision
+  by exact squared comparison (a vertex exactly T_face off the plane is accepted); the test oracles admit an exempt
+  triangle only under the module's exact rule; N2's ring and coedge budgets before the seam scan; the planar exact
+  orientation behind a vectorised tight filter. No change on the bit-identity sets vs 8cb91bc (planar 1200-face fuzz
+  and corpus, 1000 cylinder and 600 cone fuzz faces, every corpus plane, cylinder and cone face at both steps).
 
 - N2 round 8 (docs and tests only; supersedes the N3 wording of rounds 3-7 below): N2's contract states only what N2 guarantees (certified 2D
   mesh, closure coverage, `cut_ends`/`cut_fraction` as provenance, input/trust model, refusals,
