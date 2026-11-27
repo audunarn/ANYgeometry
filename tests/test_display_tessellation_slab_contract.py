@@ -191,7 +191,7 @@ def _rounded_ring_ids(rings, result):
             new.append(p)
             ks = groups.pop((p, q), []) + groups.pop((q, p), [])
             used += len(ks)
-            ks.sort(key=lambda k: result.points[k, 0], reverse=vertices[p, 0] > vertices[q, 0])
+            ks.sort(key=lambda k: result.points[k, 0], reverse=bool(vertices[p, 0] > vertices[q, 0]))
             new.extend(ks)
         out.append(new)
     assert used == len(result.cut_ends), "a cut point lies on no ring segment"
