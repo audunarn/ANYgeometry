@@ -1,14 +1,15 @@
 """N3 Codex round 2 (codex-n3r2.md; SPEC-N3-R2-FIXES.md): every reproduction as a regression test.
 
 H1  an identification (D1 merge, chain cancellation) is allowed only within the rounding allowance
-    A_face, never merely within T_face or the sag (Q8: no boundary gap beyond rounding).
+    A_face, never merely within T_face or the sag (Q8: no boundary gap beyond rounding); since
+    owner decision C1 (r3) only between bitwise-equal lifted points.
 H2  on a cylinder or cone the chart -> 3D map must be injective: the unwrapped azimuth extent of the
     rings must be certifiably below 2 pi (a zero-winding loop over more than a turn is refused).
 M1  the exact thin-orientation decision is scale-invariant (no absolute floor, no underflow).
 M2  no exact -> binary64 conversion of a bound rounds down (and the 1e-200 plane is refused
     OUT_OF_DOMAIN by the coordinate-magnitude domain).
-M3  the E2 azimuth join uses support-frame magnitudes: an axial translation of model and support
-    changes no decision.
+M3  the E2 azimuth join uses support-frame magnitudes (since owner decision C2, r3, translation
+    invariance is not a requirement: a translated face is refused or certified).
 L1  a planar vertex exactly T_face off the plane is accepted far from the origin (exact squared
     comparison, no inverse-square-root enclosure).
 L2  the orientation oracles admit an exempt triangle only under the module's exact exemption rule.
@@ -50,21 +51,21 @@ def test_h1_an_identification_beyond_rounding_is_refused_at_any_sag(sag):
     is allowed only within the rounding allowance A_face: refused at every sag."""
     g, f, z, u = R1._codex_h1_face()
     text = _refused("TRIM_INVALID", lambda: _mesh(g, f, dt.DisplayTolerance(.1, sag=sag)))
-    assert "rounding" in text and "merged cut points" in text
+    assert "bitwise" in text and "merged cut points" in text            # C1 (r3): only bitwise-equal points
 
 
-def test_h1_rounding_level_identifications_stay_accepted():
-    """The D1 cases whose merges are within rounding (the tip case, the aligned polygon) stay
-    accepted, their cancelled length within the reported trim bound (oracle)."""
+def test_h1_rounding_level_identifications_are_refused_since_c1():
+    """The D1 cases whose merges were within rounding (the tip case, the aligned polygon) were
+    accepted in r2; owner decision C1 (r3): identifications only of bitwise-equal lifted points, so
+    both are refused ``TRIM_INVALID`` (their merged 3D cuts differ by rounding)."""
     outer = [(-3., -3.), (3., -3.), (3., 7.), (-3., 7.)]
     tip = [(0., 4.5), (1., 3.5), (1., 5.5)]
     near = [(1e-17, 0.), (.5, -.5), (.5, .5)]
     g, face = T._planar([outer, tip, near])
-    tol = dt.DisplayTolerance(.5)
-    T._check_certified(g, face, tol, _mesh(g, face, tol))
+    assert "bitwise" in _refused("TRIM_INVALID", lambda: _mesh(g, face, dt.DisplayTolerance(.5)))
     g, face = T.big_polygon(aligned=True)
     tol = dt.DisplayTolerance(corpus.INTERACTION_STEP)
-    T._check_certified(g, face, tol, _mesh(g, face, tol), grid_triangles=8)
+    assert "bitwise" in _refused("TRIM_INVALID", lambda: _mesh(g, face, tol))
 
 
 # ----------------------------------------------------------------------------- H2
@@ -184,16 +185,17 @@ def _strip(z):
     return g, f
 
 
-def test_m3_the_azimuth_join_does_not_depend_on_an_axial_translation():
+def test_m3_the_azimuth_join_after_an_axial_translation_is_refused_or_certified():
     """Codex N3 r2 M3: the 1e-8 strip was accepted at z = 0 and refused at z = 2e6 ("two ring points
-    coincide"): the E2 threshold used world reach.  Accepted at both, the same mesh size."""
-    sizes = set()
+    coincide"): the E2 threshold used world reach (r2: support-frame magnitudes, kept).  Owner
+    decision C2 (r3): translation invariance is not a requirement; accepted at the origin, and an
+    accepted translated mesh is certified."""
     for z in (0., 2e6):
         g, f = _strip(z)
-        mesh = _mesh(g, f, dt.DisplayTolerance(.1))
-        C._check_cylinder(g, f, dt.DisplayTolerance(.1), mesh)
-        sizes.add((len(mesh.points), len(mesh.triangles)))
-    assert len(sizes) == 1
+        code, mesh = _status(lambda: _mesh(g, f, dt.DisplayTolerance(.1)))
+        assert mesh is not None or z != 0., code
+        if mesh is not None:
+            C._check_cylinder(g, f, dt.DisplayTolerance(.1), mesh)
 
 
 def _translated_cases(axial, lateral):
@@ -208,25 +210,26 @@ def _translated_cases(axial, lateral):
         dt.DisplayTolerance(corpus.INTERACTION_STEP), K._check_cone
 
 
-def test_m3_accept_refuse_is_invariant_under_axial_and_lateral_translation():
-    """Translating model and support along the axis (to 2e6) and across it (to 1e5) changes no
-    accept/refuse decision on cylinder and cone faces; the oracles hold on every accepted mesh.
-    The tripod skins are checked at axial and lateral shifts of 1e3 and 3e4 (their x-axis members
-    along and across): from 1e4 on N1 itself returns consecutive samples 3e-13 apart on some
-    translated edges (face 5 at (1e4, 0, 0): 3.3e-13), which N3 refuses TRIM_INVALID, as it must;
-    at 1e6 N1 refuses the edge (r1 test)."""
-    base = {}
+def test_m3_axial_and_lateral_translations_are_refused_or_certified():
+    """Model and support translated along the axis (to 2e6) and across it (to 1e5) on cylinder and
+    cone faces, and the tripod skins at shifts of 1e3 and 3e4.  Owner decision C2 (r3):
+    translation invariance is not a requirement (a placement-dependent refusal takes the consumer's
+    old route), so only "accepted -> the oracles hold" is asserted; at the origin all are accepted.
+    Measured (docs, known limit): the tripod skins moved by 1e3 are all accepted, by 1e4 6 to 12 of
+    the 18 are refused (N1 samples 3e-13 apart, folds), by 1e5 N1 itself refuses 11."""
     for axial, lateral in ((0., 0.), (2e6, 0.), (0., 1e5), (-3e5, 4e4)):
         for name, (g, face), tol, check in _translated_cases(axial, lateral):
             code, mesh = _status(lambda: _mesh(g, face, tol))
+            assert mesh is not None or (axial, lateral) != (0., 0.), (name, code)
             if mesh is not None:
                 check(g, face, tol, mesh, grid=C._grid(2))
-            assert base.setdefault(name, code) == code, (name, axial, lateral, code)
     for shift in ((1e3, 0., 0.), (0., 0., 1e3), (0., 3e4, 0.), (3e4, 0., 0.)):
         g, faces = R1._shifted_tripod(shift)
         for face in faces:
             tol = dt.DisplayTolerance(corpus.INTERACTION_STEP)
-            C._check_cylinder(g, face, tol, _mesh(g, face, tol), grid=C._grid(2))
+            code, mesh = _status(lambda: _mesh(g, face, tol))
+            if mesh is not None:
+                C._check_cylinder(g, face, tol, mesh, grid=C._grid(2))
 
 
 # ----------------------------------------------------------------------------- L1
@@ -274,7 +277,8 @@ def _module_at(sha, name):
 def test_l2_the_cylinder_oracle_catches_the_round_1_fold():
     """Codex N3 r2 L2: the oracle let ee0bc2c's exempt fold pass because its width fit within
     deviation_bound.  An exempt triangle passes only under the module's exact rule (a zero exact
-    normal, or a footprint minimum within the stated margin of its normal's magnitude)."""
+    normal, or a footprint minimum within the stated margin of its normal's magnitude); since C3
+    (r3) there is no exemption: the old module's published exempt triangle fails the oracle."""
     old = _module_at("ee0bc2c", "_display_lift_ee0bc2c")
     g, f = R1._codex_m1_face(1e6)
     tol = dt.DisplayTolerance(.1)

@@ -2,9 +2,11 @@
 
 H1  a D1 merge and the boundary cancellation it allows must hold in 3D (the lifted boundary covers
     every lifted trim interval); the oracle's on-chord test is exact.
-M1  the rounding-thin exemption never admits a fold the stored floats decide (translation).
+M1  the rounding-thin exemption never admits a fold the stored floats decide (translation; since
+    owner decision C2, r3, a translated face is refused or certified).
 M2  the rounding of the cut points N3 creates is counted in ``trim_sag_bound``.
-M3  an exactly planar face is accepted at any world origin; a real offset is still refused.
+M3  an exactly planar face is accepted at the origin, refused or certified elsewhere (C2); a real
+    offset is still refused.
 M4  the N2 ring-point budget is enforced while the rings are sampled.
 L1  the curved orientation oracles take the exact minimum over the footprint.
 """
@@ -137,23 +139,31 @@ def _shifted_tripod(shift):
 
 
 @pytest.mark.parametrize("shift", [(0., 0., 0.), (1e3, -2e3, 5e2), (1e5, 1e5, -1e5), (1e6, 1e6, -1e6)])
-def test_m1_accept_refuse_is_translation_invariant_on_tripod_and_cylinder_faces(shift):
-    """Translation changes no accept/refuse decision on six tripod skins, a quarter cylinder, a
-    cylinder window face and a cone frustum patch (all accepted at the origin), and the oracles
-    hold on the translated meshes.  (At 1e6 N1 itself refuses a tripod edge, "distinct parameters
-    evaluate to one point": the tripod is checked up to 1e5.)"""
+def test_m1_translated_tripod_and_cylinder_faces_are_refused_or_certified(shift):
+    """Six tripod skins, a quarter cylinder, a cylinder window face and a cone frustum patch,
+    translated.  Owner decision C2 (r3): translation invariance is not a requirement, only
+    fail-open matters, so a translated face may be refused (the consumer's old route), and every
+    accepted translated mesh passes the oracles; at the origin all are accepted.  (At 1e6 N1 itself
+    refuses a tripod edge: the tripod is checked up to 1e5.)"""
     tol = dt.DisplayTolerance(corpus.INTERACTION_STEP)
+    origin = not any(shift)
+
+    def check(g, face, tol, oracle):
+        code, mesh = _status(lambda: _mesh(g, face, tol))
+        assert mesh is not None or not origin, code
+        if mesh is not None:
+            oracle(g, face, tol, mesh, grid=C._grid(2))
     if max(map(abs, shift)) <= 1e5:
         g, faces = _shifted_tripod(shift)
         for face in faces:
-            C._check_cylinder(g, face, tol, _mesh(g, face, tol), grid=C._grid(2))
+            check(g, face, tol, C._check_cylinder)
     o = np.asarray(shift)
     g, face = C.quarter_cylinder(origin=tuple(o))
-    C._check_cylinder(g, face, tol, _mesh(g, face, tol), grid=C._grid(2))
+    check(g, face, tol, C._check_cylinder)
     g, face = C.window_face(tuple(o + (31., -17., 44.)), (1., 2., 2.), 1.9)
-    C._check_cylinder(g, face, dt.DisplayTolerance(.51), _mesh(g, face, dt.DisplayTolerance(.51)), grid=C._grid(2))
+    check(g, face, dt.DisplayTolerance(.51), C._check_cylinder)
     g, face = K.frustum_patch(r0=.5, origin=tuple(o))
-    K._check_cone(g, face, tol, _mesh(g, face, tol), grid=C._grid(2))
+    check(g, face, tol, K._check_cone)
 
 
 # ----------------------------------------------------------------------------- M2
@@ -174,13 +184,17 @@ def test_m2_the_cut_rounding_is_counted_in_the_trim_bound():
 
 # ----------------------------------------------------------------------------- M3
 @pytest.mark.parametrize("z", [0., 2e6, -3e7])
-def test_m3_an_exactly_planar_face_is_accepted_at_any_origin(z):
+def test_m3_an_exactly_planar_face_is_refused_or_certified_at_any_origin(z):
     """Codex M3: the triangle on z = 2e6 was EDGE_UNSUPPORTED because the world-scaled margin alone
-    (1.42e-8) exceeded T_face = 1e-8.  Accepted at every origin; the bound uses local magnitudes."""
+    (1.42e-8) exceeded T_face = 1e-8; r1 made the bound use local magnitudes (kept: measured,
+    accepted at every z here).  Owner decision C2 (r3): translation invariance is not a requirement;
+    accepted at the origin, and wherever accepted it is certified."""
     g, f = T._planar([[(0, 0, z), (2, 0, z), (1, 1, z)]], Plane((0, 0, z), (1, 0, 0), (0, 1, 0)))
     tol = dt.DisplayTolerance(.1)
-    mesh = T._check_certified(g, f, tol, _mesh(g, f, tol))
-    assert mesh.deviation_bound < 1e-12
+    code, mesh = _status(lambda: _mesh(g, f, tol))
+    assert mesh is not None or z != 0., code
+    if mesh is not None:
+        T._check_certified(g, f, tol, mesh)
 
 
 def test_m3_a_real_offset_at_a_far_origin_is_still_refused():

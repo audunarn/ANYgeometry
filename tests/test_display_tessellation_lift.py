@@ -113,20 +113,14 @@ def _check_certified(model, face, tol, mesh, grid_triangles=8):
     assert mesh.trim_sag_bound >= 0.0 and mesh.sense in (1, -1)
     _check_combinatorics(mesh, rings)
     tris = mesh.triangles.tolist()
-    # 3D orientation: every lifted triangle has an exactly positive normal against sense x (u x v),
-    # or an exactly zero one (exempt, counted)
+    # 3D orientation (C3): every published triangle has an exactly positive normal against sense x
+    # (u x v); zero normals are dropped (restored and counted by _check_combinatorics), no exemption
     n = _cross(_fp(plane.u_vector), _fp(plane.v_vector))
     pts = [_fp(p) for p in mesh.points]
-    folded = 0
     for t in tris:
         a, b, c = (pts[i] for i in t)
         nt = _cross([y - x for x, y in zip(a, b)], [y - x for x, y in zip(a, c)])
-        if not mesh.sense * sum(x * y for x, y in zip(nt, n)) > 0:
-            # the module's exact exemption rule on a plane: only an exactly zero normal (Codex N3
-            # r2 L2: never just a width within deviation_bound)
-            folded += 1
-            assert nt == (0, 0, 0), "a folded triangle with a nonzero exact normal (exemption rule)"
-    assert folded <= mesh.degenerate_count
+        assert mesh.sense * sum(x * y for x, y in zip(nt, n)) > 0, "a published triangle is not positive (exemption rule)"
     # paired deviation (Decimal, 60 digits): the plane map is affine, so the vertex errors bound
     # the triangle; checked at the vertices and at a barycentric grid of the first triangles
     with localcontext() as ctx:
@@ -155,7 +149,9 @@ def _check_combinatorics(mesh, rings):
     """Q2 (i)-(iv), exactly: an injective chart; every chart triangle CCW about sigma; every directed
     edge used once; the edges used by one triangle are exactly the chain of every ring (its vertices,
     then the cuts on each chord in order), with a chain edge that occurs twice (a zero-width spike
-    where two cuts on two chords merged into one vertex, owner decision D1) cancelling."""
+    where two cuts on two chords merged into one vertex, owner decision D1) cancelling.  The
+    triangles dropped for a zero 3D normal (C3) are restored first (:func:`_restore_dropped`) and
+    checked against ``degenerate_count`` and the drop rule; the covering is checked with them."""
     k = sum(len(r) for r in rings)
     assert mesh.ring_vertex_count == k and mesh.sense in (1, -1)
     for name in ("points", "triangles", "chart", "source"):
@@ -170,15 +166,6 @@ def _check_combinatorics(mesh, rings):
     assert all(tuple(s) in ring_sources for s in mesh.source[k:].tolist())
     q = [_fp(p) for p in mesh.chart]
     assert len(set(q)) == len(q)                                    # Q2 (i): injective chart
-    tris = mesh.triangles.tolist()
-    # every triangle is CCW about sigma x support normal: in the chart, sense x orient > 0, exactly
-    assert all(mesh.sense * _orient(*(q[i] for i in t)) > 0 for t in tris)
-    directed = [(t[i], t[(i + 1) % 3]) for t in tris for i in range(3)]
-    assert len(set(directed)) == len(directed)
-    present = set(directed)
-    boundary = {e for e in directed if (e[1], e[0]) not in present}
-    used_once = {frozenset(e) for e in boundary}
-    assert len(used_once) == len(boundary)
     by_source = {}
     for j in range(k, len(q)):
         by_source.setdefault(tuple(mesh.source[j].tolist()), []).append(j)
@@ -193,10 +180,10 @@ def _check_combinatorics(mesh, rings):
             lo, hi = sorted((mesh.chart[a, 0], mesh.chart[b, 0]))
             # a merged cut keeps one chord's source; on its other chord it is N2's cut there: its
             # ordinate is the chord's exact ordinate at its x, correctly rounded
-            # (and, in 3D, it lies within the reported trim bound of this chord: exact rationals)
+            # (and, in 3D, C1: it is bitwise this chord's own cut, so ON it to rounding, exactly)
             on |= {int(j) + k for j in np.flatnonzero((cut_x > lo) & (cut_x < hi))
                    if _rounds_onto(mesh.chart, int(j) + k, a, b)
-                   and _on_chord(mesh.points[a], mesh.points[b], mesh.points[int(j) + k], mesh.trim_sag_bound)}
+                   and _on_chord(mesh.points[a], mesh.points[b], mesh.points[int(j) + k])}
             xa, xb = q[a][0], q[b][0]
             on = sorted(on, key=lambda j: q[j][0] if xa < xb else -q[j][0])
             nodes = [a, *on, b]
@@ -205,11 +192,151 @@ def _check_combinatorics(mesh, rings):
                 counts[key] = counts.get(key, 0) + 1
         start += m
     assert max(counts.values()) <= 2
+    published = mesh.triangles.tolist()
+    tris = published + _restore_dropped(mesh, published, q, counts)
+    # every triangle is CCW about sigma x support normal: in the chart, sense x orient > 0, exactly
+    assert all(mesh.sense * _orient(*(q[i] for i in t)) > 0 for t in tris)
+    directed = [(t[i], t[(i + 1) % 3]) for t in tris for i in range(3)]
+    assert len(set(directed)) == len(directed)
+    present = set(directed)
+    boundary = {e for e in directed if (e[1], e[0]) not in present}
+    used_once = {frozenset(e) for e in boundary}
+    assert len(used_once) == len(boundary)
     assert used_once == {e for e, n in counts.items() if n % 2}
-    # a chain edge on two chords cancelled (D1): the trim interval it stands for is not on the mesh
-    # boundary, so the lifted interval must be within the reported trim bound of it (H1)
-    cancelled = sum(math.dist(*mesh.points[list(e)]) for e, n in counts.items() if n == 2)
-    assert cancelled <= mesh.trim_sag_bound, (cancelled, mesh.trim_sag_bound)
+    # a chain edge on two chords cancelled (D1): C1, both lifted ends bitwise equal (L = 0 exactly)
+    for e, n in counts.items():
+        if n == 2:
+            a, b = sorted(e)
+            assert mesh.points[a].tobytes() == mesh.points[b].tobytes(), "a cancelled chain edge with a 3D extent"
+
+
+#: the triangles the module dropped (C3), by the published triangles' bytes: a witness the oracle
+#: verifies (a spy on ``_drop_zero``; behaviour unchanged)
+_DROPPED = {}
+
+
+def _install_drop_spy():
+    from anygeometry import _display_lift
+    original = getattr(_display_lift, "_drop_zero", None)
+    if original is None or getattr(original, "_spy", False):       # an older module, or installed
+        return
+
+    def spy(face_id, points, triangles, zero):
+        kept = original(face_id, points, triangles, zero)
+        if len(zero):
+            if len(_DROPPED) > 256:
+                _DROPPED.clear()
+            _DROPPED[np.ascontiguousarray(kept, dtype=np.int64).tobytes()] = triangles[np.asarray(zero)].tolist()
+        return kept
+    spy._spy = True
+    _display_lift._drop_zero = spy
+
+
+_install_drop_spy()
+
+
+def _restore_dropped(mesh, published, q, counts):
+    """The triangles C3 dropped (exact 3D normal zero), reconstructed from the published mesh as an
+    exact cover: every unpaired published edge that is not a ring-chain edge needs its reverse in a
+    dropped triangle, every chain edge missing from the published boundary needs a dropped
+    triangle, and every edge of a chosen triangle not paired with a published one needs another
+    chosen triangle.  Candidates are chart-CCW triangles with an exactly zero 3D normal whose third
+    vertex is a neighbour (along published or chain edges) of the needed edge; a depth-first search
+    finds ``degenerate_count`` of them that close the covering (collinear runs may be triangulated
+    in several ways: any closing choice shows the published mesh is one).  Where the module's own
+    dropped rows were recorded (:func:`_install_drop_spy`) they are the witness instead, verified
+    the same way (the search can take minutes on long collinear runs).  Each must satisfy the
+    module's drop rule, re-implemented here: covered (two edges, or one longest edge, whose reverse
+    is in a published triangle or a covered dropped one), to a fixpoint.  The caller then checks the
+    covering with them."""
+    count = mesh.degenerate_count
+    if not count:
+        return []
+    witness = _DROPPED.get(np.ascontiguousarray(mesh.triangles, dtype=np.int64).tobytes())
+    present = {(t[i], t[(i + 1) % 3]) for t in published for i in range(3)}
+    odd = {e for e, n in counts.items() if n % 2}
+    boundary = {frozenset(e) for e in present if (e[1], e[0]) not in present}
+    neighbours = {}
+    for a, b in list(present) + [tuple(e) for e in counts if len(e) == 2]:
+        neighbours.setdefault(a, set()).add(b)
+        neighbours.setdefault(b, set()).add(a)
+    pts = [_fp(p) for p in mesh.points]
+
+    def candidates(x, y):
+        out = []
+        for z in sorted((neighbours.get(x, set()) | neighbours.get(y, set())) - {x, y}):
+            t = (x, y, z)
+            a, b, c = (pts[i] for i in t)
+            if (mesh.sense * _orient(*(q[i] for i in t)) > 0
+                    and _cross([v - u for u, v in zip(a, b)], [v - u for u, v in zip(a, c)]) == (0, 0, 0)):
+                out.append(t)
+        return out
+
+    def closes(extra):
+        directed = list(present) + [(t[i], t[(i + 1) % 3]) for t in extra for i in range(3)]
+        edges = set(directed)
+        return len(edges) == len(directed) and {frozenset(e) for e in edges if (e[1], e[0]) not in edges} == odd
+
+    budget = [20000]
+
+    def solve(need, chain, used, chosen):
+        budget[0] -= 1
+        if len(chosen) > count or budget[0] < 0:
+            return None
+        if not need and not chain:
+            return chosen if len(chosen) == count and closes(chosen) else None
+        if need:
+            x, y = min(need)
+            options = candidates(x, y)
+        else:
+            x, y = sorted(min(chain, key=sorted))
+            options = candidates(x, y) + candidates(y, x)
+        for t in options:
+            edges = [(t[i], t[(i + 1) % 3]) for i in range(3)]
+            if any(e in used for e in edges):
+                continue
+            n2, c2 = set(need), set(chain)
+            for a, b in edges:
+                if (a, b) in n2:
+                    n2.discard((a, b))
+                elif frozenset((a, b)) in c2:
+                    c2.discard(frozenset((a, b)))
+                elif (b, a) not in present and (b, a) not in used:
+                    n2.add((b, a))
+            found = solve(n2, c2, used | set(edges), chosen + [t])
+            if found is not None:
+                return found
+        return None
+    need = {(b, a) for a, b in present if (b, a) not in present and frozenset((a, b)) not in odd}
+    chain = {e for e in odd if e not in boundary}
+    if witness is not None:
+        # the module's dropped rows (recorded by the spy below) as a witness, verified here exactly:
+        # each a chart-CCW triangle with a zero exact normal, the count, and the closed covering
+        dropped = [tuple(t) for t in witness]
+        for t in dropped:
+            a, b, c = (pts[i] for i in t)
+            assert mesh.sense * _orient(*(q[i] for i in t)) > 0, "a dropped triangle is not chart CCW"
+            assert _cross([v - u for u, v in zip(a, b)], [v - u for u, v in zip(a, c)]) == (0, 0, 0),                 "a dropped triangle has a nonzero normal"
+        assert len(dropped) == count and closes(dropped), "the dropped triangles do not close the covering"
+    else:                                  # no witness (another module): search, with a node budget
+        dropped = solve(need, chain, set(present), [])
+    assert dropped is not None,         ("exemption rule: degenerate_count counts dropped zero-area triangles only (none may stay published)", count)
+    # the drop rule (fixpoint), independently of the module
+    owner = {(t[i], t[(i + 1) % 3]): r for r, t in enumerate(dropped) for i in range(3)}
+    covered = [False] * len(dropped)
+    changed = True
+    while changed:
+        changed = False
+        for r, t in enumerate(dropped):
+            if covered[r]:
+                continue
+            edges = [(t[i], t[(i + 1) % 3]) for i in range(3)]
+            lengths = [sum((pts[b][d] - pts[a][d]) ** 2 for d in range(3)) for a, b in edges]
+            ok = [(b, a) in present or ((b, a) in owner and covered[owner[(b, a)]]) for a, b in edges]
+            if sum(ok) >= 2 or any(o and n == max(lengths) for o, n in zip(ok, lengths)):
+                covered[r] = changed = True
+    assert all(covered), "drop rule"
+    return [list(t) for t in dropped]
 
 
 def _rounds_onto(chart, j, a, b):
@@ -524,11 +651,12 @@ def test_input_contract_and_public_surface():
 
 
 # ----------------------------------------------------------------------------- findings and fuzz
-def test_two_cuts_rounding_onto_one_point_beside_a_tip_are_merged():
+def test_two_cuts_rounding_onto_one_point_beside_a_tip_are_merged_only_if_equal_in_3d():
     """Finding (N3a bench, aligned holes): a slab line an ulp beside a hole's left tip cuts both
     tip edges; both cut ordinates round to the tip's, so two distinct cut points share one chart
-    point.  Owner decision D1 (SPEC-N3b): bitwise-equal CUT points are merged into one mesh vertex
-    before the certificate, which then holds on the merged mesh (oracle-checked)."""
+    point.  Owner decision D1 (SPEC-N3b) merged them; owner decision C1 (2026-11-27) allows the
+    identification only when the two lifted 3D cut points are bitwise equal.  Here they are not
+    (each is ``A + f (B - A)`` on its own chord): ``TRIM_INVALID`` (the consumer's old route)."""
     outer = [(-3., -3.), (3., -3.), (3., 7.), (-3., 7.)]
     tip = [(0., 4.5), (1., 3.5), (1., 5.5)]
     near = [(1e-17, 0.), (.5, -.5), (.5, .5)]
@@ -537,10 +665,7 @@ def test_two_cuts_rounding_onto_one_point_beside_a_tip_are_merged():
     assert len(set(q)) == len(q) - 1                                # N2 is valid, yet not injective
     g, face = _planar([outer, tip, near])
     tol = dt.DisplayTolerance(.5)
-    mesh = _check_certified(g, face, tol, _mesh(g, face, tol))
-    assert len(mesh.points) == len(m.points) - 1
-    first = sorted({x: i for i, x in reversed(list(enumerate(q)))}.values())    # each chart point's first index
-    assert mesh.chart.tobytes() == m.points[first].tobytes()
+    assert "bitwise" in _refused("TRIM_INVALID", lambda: _mesh(g, face, tol))
 
 
 def test_a_cut_on_a_ring_vertex_stays_refused():
@@ -580,11 +705,15 @@ def big_polygon(aligned=False):
     return g, face
 
 
-def test_aligned_400_vertex_polygon_with_20_holes_is_accepted():
-    """D1: the grid-aligned 400-vertex / 20-hole polygon (N3a bench) was refused for merged cut
-    points; it is accepted and certified."""
+def test_aligned_400_vertex_polygon_with_20_holes_is_refused_by_the_exact_identification_rule():
+    """D1 accepted the grid-aligned 400-vertex / 20-hole polygon (N3a bench) by merging cut points
+    whose 3D points differ by rounding; owner decision C1 (2026-11-27): identifications are exact,
+    so it is refused ``TRIM_INVALID`` (bolt-hole columns keep the consumer's old route).  The
+    jittered bench face stays accepted and certified."""
     g, face = big_polygon(aligned=True)
     tol = dt.DisplayTolerance(corpus.INTERACTION_STEP)
+    assert "bitwise" in _refused("TRIM_INVALID", lambda: _mesh(g, face, tol))
+    g, face = big_polygon()
     _check_certified(g, face, tol, _mesh(g, face, tol), grid_triangles=8)
 
 

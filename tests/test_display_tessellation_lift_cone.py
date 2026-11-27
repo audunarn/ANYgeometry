@@ -68,7 +68,6 @@ def _check_cone(model, face, tol, mesh, grid=C.GRID_33, every=1):
         chart = [[mp.mpf(float(x)) for x in c] for c in mesh.chart]
         bound = mp.mpf(mesh.deviation_bound)
         worst = mp.mpf(0)
-        folded = 0
         for t in mesh.triangles.tolist()[::every]:
             for w in grid:
                 x = [sum(mp.mpf(wi) * pts[i][d] for wi, i in zip(w, t)) for d in range(3)]
@@ -86,10 +85,8 @@ def _check_cone(model, face, tol, mesh, grid=C.GRID_33, every=1):
             qc = mesh.sense * sum(nn * y for nn, y in zip(n, e2))
             minimum = C._footprint_minimum(pc, qc, -mesh.sense * k * na, lo, hi)
             if not minimum > 0:
-                folded += 1
                 C._check_exempt(n, minimum, k, (p, q, s), mesh)
         assert worst <= bound, (float(worst), mesh.deviation_bound)
-    assert folded <= mesh.degenerate_count
     return mesh
 
 

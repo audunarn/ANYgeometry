@@ -43,6 +43,19 @@ All notable user-visible changes to ANYgeometry are documented here.
   triangle only under the module's exact rule; N2's ring and coedge budgets before the seam scan; the planar exact
   orientation behind a vectorised tight filter. No change on the bit-identity sets vs 8cb91bc (planar 1200-face fuzz
   and corpus, 1000 cylinder and 600 cone fuzz faces, every corpus plane, cylinder and cone face at both steps).
+- N3 Codex round 3 (owner contract decisions C1-C3, 2026-11-27, replacing the r1/r2 H1 and M1/M3 rules where they
+  conflict): C1 identifications are exact: a D1 merge only of cut points whose lifted 3D points are bitwise equal, a
+  chain cancellation only with both lifted ends bitwise equal, coedge ends meeting bitwise; otherwise `TRIM_INVALID`
+  (new text); the `A_face`-based `d + L` gate is removed and `trim_sag_bound` carries no identification term. C2
+  translation invariance is not a requirement (a placement-dependent refusal is allowed; known limit: tripod skins
+  moved by 1e4 or more are partly refused). C3 no orientation margin: a lifted triangle is kept only if certifiably
+  positive over its footprint (exact normal; on a cylinder or cone a rational enclosure of the support normal with
+  fixed-point cosine/sine enclosures), a triangle with an exactly zero normal is DROPPED from `triangles` and counted
+  in `degenerate_count` (field meaning changed; dropped only when the kept triangles cover it, else `TRIM_INVALID`,
+  new text), anything else is a fold. The ring cap is checked before the ring list is built. Changed results vs
+  692e819: the grid-aligned polygon400_holes20 (both steps) and 7 of the 1200 planar fuzz faces (all in the private
+  ulp-slab "extra" mode) are refused; 59 planar, 37 cylinder and 20 cone fuzz faces lose their zero-area triangles from
+  `triangles` (everything else identical); tripod skins, the 400-face cylinder and every other corpus face unchanged.
 
 - N2 round 8 (docs and tests only; supersedes the N3 wording of rounds 3-7 below): N2's contract states only what N2 guarantees (certified 2D
   mesh, closure coverage, `cut_ends`/`cut_fraction` as provenance, input/trust model, refusals,

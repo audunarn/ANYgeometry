@@ -1502,8 +1502,9 @@ class FaceDisplayMesh:
     area.  ``face_tolerance``: T_face.  ``deviation_bound``: the certified largest paired deviation
     of the mesh from its support, ``<= face_tolerance``.  ``trim_sag_bound``: the certified largest
     distance of the drawn boundary chords from the analytic trim (reported always, enforced only
-    when ``tol.sag`` is given).  ``degenerate_count``: triangles exempt from the orientation test as
-    rounding-thin.
+    when ``tol.sag`` is given).  ``degenerate_count``: lifted triangles with an exactly zero 3D
+    normal (zero area) DROPPED from ``triangles`` (owner decision C3, 2026-11-27: every published
+    triangle is certifiably positively oriented; a dropped one's point set lies in the kept ones).
     """
 
     face_id: int

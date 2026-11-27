@@ -103,7 +103,6 @@ def _check_cylinder(model, face, tol, mesh, grid=GRID_33, every=1):
         chart = [[mp.mpf(float(x)) for x in c] for c in mesh.chart]
         bound = mp.mpf(mesh.deviation_bound)
         worst = mp.mpf(0)
-        folded = 0
         for t in mesh.triangles.tolist()[::every]:
             # paired deviation over the barycentric grid
             for w in grid:
@@ -121,25 +120,19 @@ def _check_cylinder(model, face, tol, mesh, grid=GRID_33, every=1):
             qc = mesh.sense * sum(nn * y for nn, y in zip(n, e2))
             minimum = _footprint_minimum(pc, qc, mp.mpf(0), lo, hi)
             if not minimum > 0:
-                folded += 1
                 _check_exempt(n, minimum, 0, (p, q, s), mesh)
         assert worst <= bound, (float(worst), mesh.deviation_bound)
-    assert folded <= mesh.degenerate_count
     return mesh
 
 
 def _check_exempt(n, minimum, k, corners, mesh):
-    """A triangle whose exact footprint minimum is not positive passes only under the module's
-    exact exemption rule (Codex N3 r2 L2): an exactly zero normal, or a minimum within the stated
-    margin of the normal's magnitude, ``2 x 32 eps (1 + |k|) |n|`` (the module's margin around its
-    own float evaluation), and rounding-thin; never just because its width fits deviation_bound."""
+    """A published triangle whose exact footprint minimum is not positive.  The production rule
+    (owner decision C3; Codex N3 r3 L1) has NO exemption rule (no margin, no width limit): a
+    triangle is kept only if certifiably positive, a zero normal is dropped (never published), so
+    this always fails."""
     size = mp.sqrt(sum(x * x for x in n))
-    if size == 0:
-        return
-    assert minimum >= -64 * mp.mpf(2) ** -52 * (1 + abs(k)) * size, ("exemption rule", float(minimum), float(size))
-    p, q, s = corners
-    width = size / max(mp.sqrt(sum((y - x) ** 2 for x, y in zip(u, v))) for u, v in ((p, q), (q, s), (s, p)))
-    assert width <= mesh.deviation_bound, "a folded triangle is not rounding-thin"
+    raise AssertionError(("no exemption rule: a published triangle's footprint minimum is not positive",
+                          float(minimum), float(size)))
 
 
 # ----------------------------------------------------------------------------- fixtures

@@ -21,7 +21,9 @@ not ring vertices) whose chart points are bitwise equal become one mesh vertex (
 own chord's position and source) before the certificates; the boundary chain is then taken as a
 1-chain, a chain edge occurring in both directions (the zero-width spike between the two chords)
 cancelling, and every certificate runs on the merged mesh.  A chart point shared with a ring
-vertex (an N1 sample) stays ``TRIM_INVALID``.
+vertex (an N1 sample) stays ``TRIM_INVALID``.  Since owner decision C1 (2026-11-27) a merge needs
+the merged cuts' LIFTED 3D points bitwise equal, and a cancellation both lifted ends of the
+cancelled chain edge bitwise equal (:func:`_check_identified`); otherwise ``TRIM_INVALID``.
 
 Plane bounds (``eps`` the float epsilon).  The chart is ``c = ((P - o).e1, (P - o).e2)`` with the
 module's own frame ``e1 = u / |u|``, ``n = (u x v) / |u x v|``, ``e2 = n x e1``.  Let ``e1*, e2*``
@@ -45,8 +47,8 @@ Orientation (Q7): on a plane the support normal is constant, so the sign holds o
 whole footprint iff it holds once: ``nT . (sense n) > (16 eps + 2 alpha) |d1| |d2|`` (``nT = d1 x
 d2`` computed from the stored vertices; the differences, the cross product, the dot and the
 frame's tilt each round by at most a few eps of ``|d1| |d2|``).  A triangle this test cannot
-certify is decided by a tight filter, else exactly (M1, :func:`_plane_orientation`); only an
-exactly zero normal is exempt and counted in ``degenerate_count``.
+certify is decided by a tight filter, else exactly (M1, :func:`_plane_orientation`); an exactly
+zero normal is dropped from the mesh and counted in ``degenerate_count`` (C3, :func:`_drop_zero`).
 
 Cylinder (N3b).  Chart ``c = (theta, h)``: ``h = (P - o).a`` (``a`` the normalised stored axis),
 ``theta = atan2((P - o).e2, (P - o).e1)`` unwrapped along each ring (each step reduced into
@@ -111,10 +113,13 @@ Orientation (Q7) on a cylinder: the reference normal is ``sense x c(theta)`` (``
 c(theta)``, outward).  ``n . c(theta) = p cos theta + q sin theta = R cos(theta - phi)``: its set
 above a margin ``m >= 0`` is an arc shorter than pi, so on a footprint ``[theta_lo, theta_hi]``
 narrower than pi the minimum exceeds ``m`` iff both end values do (an interval with both ends in
-that arc cannot contain its complement, longer than the interval).  Checked as ``sense n .
-c(theta_end) > 40 eps |d1| |d2|`` at both ends (the cross product, the frame and the trigonometric
-values each round by a few eps of ``|d1| |d2|``); a footprint of pi or more is refused.  Every
-triangle the test cannot certify is decided exactly (M1, :func:`_thin_curved`).
+that arc cannot contain its complement, longer than the interval).  Filter: ``sense n .
+c(theta_end) > 40 eps |d1| |d2|`` at both ends certifies (an error bound, not a margin: the
+rounded differences and cross product about 2.5 eps, the dots 2 eps, the frame ``sqrt(2) FE``
+5.7 eps, cosine and sine (libm, assumed within a few ulps) and the sums 2.5 eps: about 13 eps
+of ``|d1| |d2|``, a threefold slack); a footprint of pi or more is refused.  Every triangle the
+filter cannot certify is decided by an exact enclosure (C3, :func:`_thin_curved`): kept only if
+certifiably positive, dropped if its exact normal is zero, otherwise a fold.
 
 Cone (N3c).  ``S*(theta, h) = o + rho(h) c(theta) + h a*``, ``rho = r0 + k h``, ``k = (r1 - r0) /
 (height |axis|)``; ``A_face`` as the cylinder's with ``rho_max`` for ``r`` plus the rounding of
@@ -126,23 +131,25 @@ vertices' variance and covariance in ``D``), taken exactly (edges in closed form
 point where ``H`` is strictly concave), plus the kappa and rounding terms (:class:`_ConeBound`).
 Boundary chords: ``rho dT^2 / 8 + |k| dT dH / 4`` plus offsets and ``A_face``.  Orientation: the
 sign of ``n . (c(theta) - k a)`` over the footprint, ends plus the sinusoid's minimum where it may
-lie inside.  A trim reaching the apex (or ``rho <= 0`` at a ring point) is ``OUT_OF_DOMAIN``.
+lie inside (filter ``40 eps (1 + |k|) |d1| |d2|``, the budget above plus about 17 eps |k|; the
+rest the exact enclosure).  A trim reaching the apex (or ``rho <= 0`` at a ring point) is ``OUT_OF_DOMAIN``.
 Azimuth join (E2): on a cone the azimuth's rounding uses the smallest ``rho`` at the ring points.
 
 Codex round 1 (owner decisions H1, M1-M4, L1).  H1: a D1 merge and the chain cancellation it
-allows must hold in 3D: the merge distance ``d`` plus the cancelled chord length ``L``
-(:func:`_identification`) is added to ``trim_sag_bound`` (and, round 2, must not exceed
-``A_face``).  M1: a triangle the float sign test cannot certify is decided from its exact normal
-(:func:`_plane_orientation`, :func:`_thin_curved`); exempt only a zero normal or, on a curved support, a
-footprint minimum within the support normal's rounding.  M2: the cut points' rounding
+allows must hold in 3D: the merge distance ``d`` plus the cancelled chord length ``L`` was
+added to ``trim_sag_bound`` (and, round 2, had to stay within ``A_face``; round 3, C1: replaced by
+bitwise equality).  M1: a triangle the float sign test cannot certify is decided from its exact
+normal (:func:`_plane_orientation`, :func:`_thin_curved`); r1/r2 exempted a zero normal or, on a
+curved support, a footprint minimum within the support normal's rounding (round 3, C3: no
+exemption).  M2: the cut points' rounding
 (:func:`_cut_rounding`) is in ``trim_sag_bound``.  M3: where the world-scaled bound exceeds
 T_face, an origin-relative bound (and on a plane an exact rational decision,
 :meth:`_PlaneChart.exact_bound`) decides; a face the first bound accepts is unchanged.  M4: N2's
 ring caps are enforced while the rings are sampled (:func:`_ring`).
 
 Codex round 2 (owner decisions H1, H2, M1-M3, L1-L3, P1; docs "Codex round 2").  H1: an
-identification is allowed only within the rounding allowance ``A_face`` (no boundary gap beyond
-rounding).  H2: on a cylinder or cone the rings' unwrapped azimuth extent must be certifiably
+identification was allowed only within the rounding allowance ``A_face`` (round 3, C1: only
+between bitwise-equal points).  H2: on a cylinder or cone the rings' unwrapped azimuth extent must be certifiably
 below 2 pi (:func:`_check_extent`; the chart -> 3D map is then injective).  M1/M2: the magnitude
 domain (:func:`_check_magnitudes`, nonzero magnitudes at least ``2^-200``), bound norms that never
 underflow (:func:`_norms`), every float orientation filter routing what it cannot certify to an
@@ -151,6 +158,17 @@ binary64 conversions rounded up (:func:`_sqrt_up`).  M3: the E2 threshold from s
 magnitudes plus the projected representation (:meth:`_CylinderChart.reach`).  L1: the exact plane
 decision by squared comparison (:func:`_sign_two_roots`).  L3: budgets before the seam scan.  P1:
 the planar exact orientation behind a tight vectorised filter (:func:`_plane_orientation`).
+
+Codex round 3: the retry limit reached on three classes; owner contract decisions C1-C3
+(2026-11-27, replacing r1/r2 H1 and the r1/r2 M1/M3 rules where they conflict; docs "Codex round
+3").  C1: identifications are exact (bitwise-equal lifted points, :func:`_check_identified`, also
+the coedge joins of :func:`_ring`); no allowance, ``trim_sag_bound`` without an identification
+term.  C2: translation invariance is not a requirement (a placement-dependent refusal is allowed,
+an accepted mesh must be certified); thresholds unchanged.  C3: no orientation margin: a triangle
+is kept only if certifiably positive over its footprint (exact normal, an enclosure of the
+support normal, :func:`_thin_curved`, :func:`_cos_sin`), a zero exact normal is dropped and
+counted (:func:`_drop_zero`), anything else is a fold.  L2: the ring cap before the ring list is
+built.
 """
 from __future__ import annotations
 
@@ -184,6 +202,10 @@ _REFINE_ROUNDS = 8
 #: parameter is at least this in magnitude (N1 bounds them above by MAX_DISPLAY_COORDINATE)
 _MIN_MAGNITUDE = 2.0 ** -200
 _TINY_NORMAL = 2.0 ** -1022
+#: fixed-point bits of the exact fallback's cosine and sine enclosures (C3, :func:`_cos_sin`)
+_COS_SIN_BITS = 128
+#: a rational upper bound of sqrt(2) (C3: |cos t| + |sin t| <= sqrt(2))
+_SQRT2_UP = Fraction(141422, 100000)
 
 # fixed refusal texts (owner decision N2 r5 (1); TRIM_INVALID covers both bad trims and
 # uncertifiable lifts, distinguished here: owner decision 2026-11-26, REFUSAL_CODES unchanged)
@@ -199,8 +221,10 @@ _FOLD = "a lifted triangle folds against the face normal (lift not certified)"
 _DEVIATION = "a lifted triangle's deviation bound exceeds the face tolerance (lift not certified)"
 _ARITHMETIC = "an arithmetic error in the lift"
 _WINDS = "a loop winds around the support's axis"
-_IDENTIFY = ("merged cut points, or the boundary interval their merge cancels, lie apart in 3D by more than the "
-             "rounding allowance (lift not certified: a gap in the trim)")
+_IDENTIFY = ("merged cut points, or the ends of a boundary interval their merge cancels, are not bitwise equal in 3D "
+             "(lift not certified: a gap in the trim)")
+_ZERO_UNCOVERED = ("a zero-area lifted triangle is not covered by the triangles kept beside it (lift not certified: "
+                   "it cannot be dropped)")
 _EXTENT = "the trim's azimuth extent is not certifiably below 2 pi (the support would be covered twice)"
 
 
@@ -293,17 +317,6 @@ def _exact_normals(points, rows):
     return normals, edges2, q
 
 
-def _normalised(n):
-    """An integer vector scaled by an exact power of two so that its largest component lies in
-    [1, 4), as floats (correctly rounded; components far below the largest may be subnormal):
-    the direction to half an ulp per component, never underflowing to zero (scale-invariant)."""
-    top = max(abs(x) for x in n)
-    shift = top.bit_length() - 2
-    if shift >= 0:
-        return [x / (1 << shift) for x in n]
-    return [float(x << -shift) for x in n]
-
-
 def _refuse(code, face_id, text):
     return dt.DisplayTrimRefused(code, f"face {dt._id_text(face_id)}: {text}")
 
@@ -374,7 +387,7 @@ def _ring(model, face_id, loop, tol, budget=None) -> _Ring:
         pieces.append(points)
         edges.append((samples, trim))
     for here, there in zip(pieces, pieces[1:] + pieces[:1]):
-        if not np.array_equal(here[-1], there[0]):
+        if _bits(here[-1:]).tobytes() != _bits(there[:1]).tobytes():          # bit for bit (C1)
             raise _invalid(face_id, _GAP)
     return _Ring(np.vstack([p[:-1] for p in pieces]), np.vstack(sources), edges, allowance)
 
@@ -705,10 +718,10 @@ class _Assembled:
     """The mesh whose combinatorics are certified: N2's, merged cut points (D1) folded in.
 
     ``cut_rounding``: a bound of the distance of every cut point (as computed, ``A + f (B - A)``)
-    from its exact 3D chord (M2); ``identify``: a bound of how far the lifted boundary moves by the
-    D1 identifications, ``d + L`` (H1, :func:`_identification`)."""
+    from its exact 3D chord (M2).  The D1 identifications move no lifted point (C1,
+    :func:`_check_identified`)."""
     __slots__ = ("points", "triangles", "chart", "ends", "fraction", "source", "sense", "following",
-                 "cut_rounding", "identify")
+                 "cut_rounding")
 
 
 def _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure=None) -> _Assembled:
@@ -735,7 +748,6 @@ def _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure=N
     # M2: a computed cut A + f (B - A) (f in [0, 1]) is within 2 eps (|A_i| + |B_i|) of its exact
     # chord per coordinate (the difference, the product and the sum, half an ulp of each result)
     out.cut_rounding = _cut_rounding(start, finish) if len(cuts) else 0.0
-    out.identify = 0.0
     if remap is None:
         triangles = _combinatorial(face_id, rings, chart, triangles, ends, signs, structure=structure)
     else:
@@ -743,7 +755,7 @@ def _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure=N
         cancelled = []
         triangles = _combinatorial(face_id, rings, chart, triangles, ends, signs, remap, merged_chart, structure,
                                    cancelled)
-        out.identify = _identification(ring_points, cuts, representative, *cancelled[0])
+        _check_identified(face_id, np.vstack((ring_points, cuts)), representative, *cancelled[0])
         keep = kept[k:] - k
         chart, cuts, ends, fraction = merged_chart, cuts[keep], ends[keep], fraction[keep]
     out.points = np.vstack((ring_points, cuts))
@@ -762,26 +774,27 @@ def _cut_rounding(start, finish):
     return float(_norms(np.abs(start) + np.abs(finish)).max()) * 4.0 * _EPS * (1.0 + 8.0 * _EPS)
 
 
-def _identification(ring_points, cuts, representative, tails, heads):
-    """H1: how far the D1 identifications move the lifted boundary from the lifted ring chords.
+def _bits(points):
+    """The binary64 bit patterns of an (n, 3) array (bitwise comparison: ``-0.0 != 0.0``)."""
+    return np.ascontiguousarray(points, dtype=np.float64).view(np.uint64)
 
-    A merged cut is replaced by its representative (a cut on another chord with the same chart
-    point): ``d`` = the largest 3D distance between the two, as computed.  A chain edge that
-    cancels with its reverse (the zero-width spike between two chords) leaves the piece of chord
-    it stood for off the mesh boundary: every point of such a piece is within the total 3D length
-    ``L`` of the cancelled pieces of a node that stays on the boundary (a cancelled run along a
-    ring ends at nodes of that ring's remaining chain; a ring whose whole chain cancels is refused
-    by :func:`_combinatorial`).  So every lifted chord point is within ``d + L`` of the mesh
-    boundary and every boundary point within ``d`` of a chord: ``d + L`` is added to
-    ``trim_sag_bound`` and must not exceed the face's rounding allowance ``A_face`` (Codex N3 r2
-    H1: Q8's "crack-free to rounding" wins over T_face and the sag; else ``TRIM_INVALID``).  Both measured on the
-    computed points (the cuts' own rounding is ``cut_rounding``), raised for the rounding of the
-    differences, norms and sum."""
-    points = np.vstack((ring_points, cuts))
-    moved = representative != np.arange(len(points))
-    d = float(_norms(points[moved] - points[representative[moved]]).max()) if bool(np.any(moved)) else 0.0
-    length = float(np.sum(_norms(points[tails] - points[heads]))) if len(tails) else 0.0
-    return (d + length) * (1.0 + 8.0 * _EPS + 4.0 * _EPS * (len(tails) + 1))
+
+def _check_identified(face_id, points, representative, tails, heads):
+    """C1 (owner decision 2026-11-27, replacing the r1/r2 ``d + L`` allowance): identifications are
+    exact.  A merged cut (D1: a cut point whose chart point equals another cut's) is identified with
+    its representative only when their LIFTED 3D points (as computed, ``A + f (B - A)`` on their
+    own chords) are bitwise equal; a chain edge cancelling with its reverse (the zero-width spike
+    between two chords) only when both of its lifted endpoints are bitwise equal (its 3D length
+    ``L`` is exactly 0).  Otherwise ``TRIM_INVALID`` (fixed text).  So no identification moves a
+    lifted point and no cancelled piece has a 3D extent: the mesh boundary is the lifted chain of
+    the ring chords, point for point, and ``trim_sag_bound`` carries no identification term.  No
+    allowance enters (r3: an allowance from ``A_face`` reached 15646 on an ill-conditioned plane)."""
+    bits = _bits(points)
+    moved = np.flatnonzero(representative != np.arange(len(points)))
+    if len(moved) and not np.array_equal(bits[moved], bits[representative[moved]]):
+        raise _invalid(face_id, _IDENTIFY)
+    if len(tails) and not np.array_equal(bits[tails], bits[heads]):
+        raise _invalid(face_id, _IDENTIFY)
 
 
 # ----------------------------------------------------------------------------- plane
@@ -914,8 +927,10 @@ def _plane_orientation(face_id, plane, points, rows, sense):
     within ``normal_error`` per component; then ``|computed - exact| <= sum (|N_f| B P + dN (|nT_f|
     + B P)) + 2 eps sum |N_f nT_f|`` (the dot's own rounding), raised by ``4 eps`` and an underflow
     slack (the undecided go exact, so the slack only routes).  Exactly (integers over a common
-    power-of-two scale, :func:`_exact_normals`): positive certified, zero normal exempt (counted),
-    anything else a fold (``TRIM_INVALID``).  Returns the exempt count."""
+    power-of-two scale, :func:`_exact_normals`): positive certified, a zero normal returned (C3:
+    dropped and counted by the caller, :func:`_drop_zero`), anything else a fold
+    (``TRIM_INVALID``).  The reference ``u x v`` is exact here, so this is the exact sign, no
+    margin.  Returns the positions (in ``rows``) of the zero normals."""
     a, b, c = points[rows[:, 0]], points[rows[:, 1]], points[rows[:, 2]]
     d1, d2 = b - a, c - a
     left = np.column_stack((d1[:, 1] * d2[:, 2], d1[:, 2] * d2[:, 0], d1[:, 0] * d2[:, 1]))
@@ -931,74 +946,135 @@ def _plane_orientation(face_id, plane, points, rows, sense):
         raise _invalid(face_id, _FOLD)
     rest = np.flatnonzero(~(value > error))
     if not len(rest):
-        return 0
+        return rest
     normals, _, _ = _exact_normals(points, rows[rest])
     reference = plane.exact_normal
-    exempt = 0
-    for n in normals:
+    zero = []
+    for position, n in zip(rest.tolist(), normals):
         dot = sense * (n[0] * reference[0] + n[1] * reference[1] + n[2] * reference[2])
         if dot > 0:
             continue
         if n != (0, 0, 0):
             raise _invalid(face_id, _FOLD)
-        exempt += 1
-    return exempt
+        zero.append(position)
+    return np.array(zero, dtype=np.int64)
 
 
-def _thin_curved(points, rows, lo, hi, e1, e2, axis, k, sense, allowance=None):
-    """M1 on a cylinder (``k = 0``) or cone: the orientation of each triangle the float filter
-    cannot certify, over its footprint ``[lo, hi]``, decided from the EXACT normal of its stored
-    points (integers, :func:`_exact_normals`), scaled by an exact power of two so its largest
-    component lies in [1, 4) and then correctly rounded (Codex N3 r2 M1: scale-invariant, no
-    absolute floor, nothing underflows to zero): a relative error of half an ulp per component.
-    The support normal ``c(theta) - k a`` is not representable (a transcendental frame), so
-    ``g(theta) = n . (c(theta) - k a)`` is evaluated with the module's frame and decided against
-    the margin ``m = 32 eps (1 + |k|) |n|``: the normal's rounding (eps / 2), the frame (``2 FE``,
-    8 eps), the cosine and sine (an ulp each), the dot products and the sum (6 eps), each times
-    ``(1 + |k|)``.  Positive over the footprint (both ends above ``m``; on a cone also the
-    sinusoid's minimum where it may lie inside): certified, not exempt.  A value below ``-m`` (a
-    fold the stored floats decide) or a footprint of pi or more: folded.  Exempt (counted in
-    ``degenerate_count``) only an exactly zero normal, or a footprint minimum within ``[-m, m]``
-    (the sign is undecidable because the support normal is not representable) of a triangle
-    whose exact 3D width ``|n| / longest edge`` is at most ``allowance`` (decided exactly; no
-    width limit when ``allowance`` is None); otherwise folded.  Returns ``(exempt, folded)``."""
-    exempt = np.zeros(len(rows), dtype=bool)
+def _cos_sin(theta):
+    """Rational enclosures ``(cos_lo, cos_hi, sin_lo, sin_hi)`` of the cosine and sine of the float
+    ``theta`` (exact as a rational), or ``None`` for ``|theta| > 64`` (undecided: the caller
+    folds).  Fixed-point Taylor series in integers (C3: no libm accuracy assumption): with ``theta =
+    N / D`` each term ``|theta|^j / j!`` is ``floor(|N|^j 2^b / (D^j j!))`` (``b`` =
+    :data:`_COS_SIN_BITS`), less than one unit ``2^-b`` low; the series stops at the first term
+    that is 0 past ``j > 2 |theta| + 2``, where every later term is below half its predecessor (the
+    tail is below one unit).  So each enclosure is the sum plus or minus ``(terms + 2)`` units."""
+    x = Fraction(theta)
+    if abs(x) > 64:
+        return None
+    numerator, denominator = x.numerator, x.denominator
+    base = abs(numerator)
+    scale = 1 << _COS_SIN_BITS
+    cosine = sine = 0
+    power, factorial = 1, 1                      # |N|^j and D^j j!
+    limit = 2 * abs(x) + 2
+    j = 0
+    while True:
+        term = power * scale // factorial
+        sign = -1 if (j // 2) % 2 else 1
+        if j % 2:
+            sine += (-sign if numerator < 0 else sign) * term
+        else:
+            cosine += sign * term
+        if term == 0 and j > limit:
+            break
+        j += 1
+        power *= base
+        factorial *= denominator * j
+    error = j + 3
+    return (Fraction(cosine - error, scale), Fraction(cosine + error, scale),
+            Fraction(sine - error, scale), Fraction(sine + error, scale))
+
+
+def _thin_curved(points, rows, lo, hi, e1, e2, axis, k, sense):
+    """M1 / C3 on a cylinder (``k = 0``) or cone: the orientation of each triangle the float filter
+    cannot certify, over its footprint ``[lo, hi]``, from the EXACT normal ``n`` of its stored
+    points (integers, :func:`_exact_normals`) and an ENCLOSURE of the support normal (owner
+    decision C3, 2026-11-27: no orientation margin).  The exact map ``S*`` uses an exactly
+    orthonormal frame ``(e1*, e2*, a*)`` within ``FE = _FRAME_ERROR`` of the module's float frame
+    ``(e1, e2, a)`` (each unit vector; ``a`` the normalised stored axis) and the exact slope ``k*``
+    within ``kerr = 8 eps |k|`` of the computed ``k`` (a difference, a norm, a product and a
+    quotient); its normal direction is ``c*(t) - k* a*``.  With ``g*(t) = sense n . (cos t e1* +
+    sin t e2* - k* a*)`` and ``g(t) = P cos t + Q sin t + L`` (``P = sense n . e1``, ``Q = sense n .
+    e2``, ``L = -sense k n . a``, exact rationals of the stored floats),
+
+        |g*(t) - g(t)| <= E = |n| (sqrt(2) FE + (|k| + kerr) FE + kerr (1 + FE))
+
+    (``|n|`` rounded up by an integer square root).  ``cos t`` and ``sin t`` at the footprint ends
+    are enclosed rationally (:func:`_cos_sin`), so the lower ends below are exact lower bounds:
+
+    - a footprint of pi or more (exactly: ``hi - lo`` against the float pi, which is below pi):
+      folded;
+    - both ends' lower bounds of ``g - E`` positive, else folded;
+    - on a cylinder (``L = 0``) that suffices: ``{g > E}`` is an arc shorter than pi, and an
+      interval narrower than pi with both ends in it lies in it;
+    - on a cone also ``g - E > 0`` everywhere (``L - E > sqrt(P^2 + Q^2)``, decided by squares), or
+      the minimum of ``g`` provably not inside: ``g'(lo) > 0`` (rising after its minimum, the next
+      one is pi past the maximum ahead) or ``g'(hi) < 0`` (enclosed); else folded.
+
+    Then ``g* >= g - E > 0`` over the footprint: certifiably positive.  An exactly zero normal is
+    returned as zero (dropped and counted by the caller).  Everything is exact rational arithmetic
+    on the stored floats; scale-invariant (Codex N3 r2 M1).  Returns ``(zero, folded)``."""
+    zero = np.zeros(len(rows), dtype=bool)
     folded = np.zeros(len(rows), dtype=bool)
-    slack = 1.0 + abs(k)
-    normals, edges2, scale = _exact_normals(points, np.asarray(rows))
-    limit = None if allowance is None else Fraction(allowance)
+    normals, _, _ = _exact_normals(points, np.asarray(rows))
+    frame = [[Fraction(float(x)) for x in vector] for vector in (e1, e2, axis)]
+    slope = Fraction(float(k))
+    kerr = 8 * Fraction(_EPS) * abs(slope)
+    fe = Fraction(dt._FRAME_ERROR)
+    factor = _SQRT2_UP * fe + (abs(slope) + kerr) * fe + kerr * (1 + fe)
+    half_turn = Fraction(math.pi)                       # the float pi, below pi
+    ends = {}
+
+    def enclosure(theta):
+        if theta not in ends:
+            ends[theta] = _cos_sin(theta)
+        return ends[theta]
     for r, n in enumerate(normals):
         if n == (0, 0, 0):
-            exempt[r] = True
+            zero[r] = True
             continue
-        nf = np.array(_normalised(n))
-        margin = 32.0 * _EPS * slack * float(np.sqrt(nf @ nf))
-        p, q = sense * float(nf @ e1), sense * float(nf @ e2)
-        level = -sense * k * float(nf @ axis)
         a, b = float(lo[r]), float(hi[r])
-        if not b - a < math.pi:
+        if not Fraction(b) - Fraction(a) < half_turn:
             folded[r] = True
             continue
-        at_lo = p * math.cos(a) + q * math.sin(a) + level
-        at_hi = p * math.cos(b) + q * math.sin(b) + level
-        inside = (-p * math.sin(a) + q * math.cos(a) <= margin) and (-p * math.sin(b) + q * math.cos(b) >= -margin)
-        bottom = level - math.hypot(p, q)
-        low = min(at_lo, at_hi)
+        at_a, at_b = enclosure(a), enclosure(b)
+        if at_a is None or at_b is None:
+            folded[r] = True
+            continue
+        p = sense * sum(x * y for x, y in zip(n, frame[0]))
+        q = sense * sum(x * y for x, y in zip(n, frame[1]))
+        level = -sense * slope * sum(x * y for x, y in zip(n, frame[2]))
+        size = math.isqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) + 1
+        slack = size * factor
+        lowest = []
+        for cl, ch, sl, sh in (at_a, at_b):
+            lowest.append((p * cl if p >= 0 else p * ch) + (q * sl if q >= 0 else q * sh) + level - slack)
+        if not (lowest[0] > 0 and lowest[1] > 0):
+            folded[r] = True
+            continue
         if k == 0.0:
-            if low > margin:                       # both ends positive on a footprint < pi: positive
-                continue
-        elif low > margin and (not inside or bottom > margin):
             continue
-        if inside:
-            low = min(low, bottom)
-        if low < -margin:
-            folded[r] = True
-        elif limit is None or (sum(x * x for x in n) * limit.denominator ** 2
-                               <= limit.numerator ** 2 * scale * scale * edges2[r]):
-            exempt[r] = True                       # |n|^2 <= A^2 l^2 (integers over q^2, q^2)
-        else:
-            folded[r] = True
-    return exempt, folded
+        floor_ = level - slack
+        if floor_ > 0 and floor_ * floor_ > p * p + q * q:
+            continue
+        cl, ch, sl, sh = at_a
+        rising = (-p * sh if p >= 0 else -p * sl) + (q * cl if q >= 0 else q * ch)            # g'(lo), lower end
+        cl, ch, sl, sh = at_b
+        falling = (-p * sl if p >= 0 else -p * sh) + (q * ch if q >= 0 else q * cl)           # g'(hi), upper end
+        if rising > 0 or falling < 0:
+            continue
+        folded[r] = True
+    return zero, folded
 
 
 def _lift_plane(model, face_id, tol, support, rings, extra):
@@ -1021,7 +1097,6 @@ def _lift_plane(model, face_id, tol, support, rings, extra):
     built = _assemble(face_id, rings, ring_points, charts, ring_chart, mesh)
     points, chart, triangles, sense = built.points, built.chart, built.triangles, built.sense
     rounding = plane.rounding(points, chart)
-    _check_identification(face_id, built, rounding)
     # (9) certificates
     if sense < 0:
         triangles = triangles[:, [0, 2, 1]]
@@ -1030,41 +1105,82 @@ def _lift_plane(model, face_id, tol, support, rings, extra):
     normal = _cross(d1, d2)
     lengths = np.sqrt(np.sum(d1 ** 2, axis=1)) * np.sqrt(np.sum(d2 ** 2, axis=1))
     dot = normal @ (sense * plane.n)
-    margin = (16.0 * _EPS + 2.0 * plane.alpha) * lengths + _UNDERFLOW
-    positive = dot > margin                                 # the float filter certifies these
-    # M1: every triangle the filter cannot certify is decided by a tight filter, else exactly;
-    # exempt only a zero normal (the slack only routes: the undecided go exact)
-    exempt_count = 0
+    filter_bound = (16.0 * _EPS + 2.0 * plane.alpha) * lengths + _UNDERFLOW
+    positive = dot > filter_bound                                 # the float filter certifies these
+    # M1 / C3: every triangle the filter cannot certify is decided by a tight filter, else exactly;
+    # a zero normal is dropped (the slack only routes: the undecided go exact)
+    zero = np.zeros(0, dtype=np.int64)
     undecided = np.flatnonzero(~positive)
     if len(undecided):
-        exempt_count = _plane_orientation(face_id, plane, points, triangles[undecided], sense)
+        zero = undecided[_plane_orientation(face_id, plane, points, triangles[undecided], sense)]
     bounds = _plane_point_bounds(face_id, plane, points, chart, face_tolerance, rounding, "TRIM_INVALID",
                                  lambda worst: _DEVIATION)
     per_triangle = np.max(bounds[triangles], axis=1)
     deviation = float(per_triangle.max())
     if not deviation <= face_tolerance:
         raise _invalid(face_id, _DEVIATION)
+    triangles = _drop_zero(face_id, points, triangles, zero)
     trim = _trim_bound(face_id, model, tol, rings, built)
     return dt.FaceDisplayMesh(face_id, dt._frozen(points), dt._frozen(triangles), dt._frozen(chart.copy()), k,
-                              dt._frozen(built.source), int(sense), face_tolerance, deviation, trim, exempt_count)
+                              dt._frozen(built.source), int(sense), face_tolerance, deviation, trim, len(zero))
 
 
-def _check_identification(face_id, built, allowance):
-    """H1 (Codex N3 r1, r2): the D1 identifications may move the lifted boundary by at most the
-    rounding allowance ``A_face`` of the face's mesh points (the allowance that makes T-vertices
-    crack-free to rounding), never merely by T_face or the sag: no accepted mesh has a boundary gap
-    beyond rounding."""
-    if not built.identify <= allowance:
-        raise _invalid(face_id, _IDENTIFY)
+def _drop_zero(face_id, points, triangles, zero):
+    """C3: the triangles whose exact 3D normal is zero (``zero``: their rows) are dropped from the
+    published mesh (the caller counts them in ``degenerate_count``).  A zero-normal triangle's three
+    lifted points are collinear (or coincide), so its point set is its longest edge, and any two of
+    its edges cover it.  It is dropped only if that set provably lies in the kept triangles: call an
+    edge COVERED when its reverse is in a kept triangle, or in a dropped triangle already shown
+    covered (the edge is then part of that triangle's set); a dropped triangle is covered when two
+    of its edges are, or one longest edge (exact squared lengths) is; iterated to a fixpoint (ulp
+    slabs give strips of zero-area triangles along one chord).  Any triangle left uncovered:
+    ``TRIM_INVALID`` (fail closed).  Then the kept triangles contain, as point sets, every dropped
+    one: the lifted surface and the lifted boundary chain (whose dropped chain edges lie in the kept
+    mesh) are unchanged as sets, so a neighbour sharing the trim meets this mesh without a gap; the
+    chart covering (Q2) is certified on the full chart mesh, and ``deviation_bound`` is taken over
+    all of it, so the support over a dropped triangle's footprint is within ``deviation_bound`` of
+    the kept mesh."""
+    if not len(zero):
+        return triangles
+    n = len(points)
+    drop = np.zeros(len(triangles), dtype=bool)
+    drop[zero] = True
+    kept = triangles[~drop]
+    kept_edges = set(np.concatenate((kept[:, 0] * n + kept[:, 1], kept[:, 1] * n + kept[:, 2],
+                                     kept[:, 2] * n + kept[:, 0])).tolist())
+    rows = [triangles[row].tolist() for row in np.asarray(zero).tolist()]
+    owner = {(t[i], t[(i + 1) % 3]): r for r, t in enumerate(rows) for i in range(3)}
+    longest = []
+    for t in rows:
+        exact = [[Fraction(float(x)) for x in points[i]] for i in t]
+        lengths = [sum((exact[(i + 1) % 3][d] - exact[i][d]) ** 2 for d in range(3)) for i in range(3)]
+        longest.append([value == max(lengths) for value in lengths])
+    covered = [False] * len(rows)
+    changed = True
+    while changed:
+        changed = False
+        for r, t in enumerate(rows):
+            if covered[r]:
+                continue
+            ok = []
+            for i in range(3):
+                a, b = t[i], t[(i + 1) % 3]
+                ok.append(b * n + a in kept_edges or ((b, a) in owner and covered[owner[(b, a)]]))
+            if sum(ok) >= 2 or any(o and l for o, l in zip(ok, longest[r])):
+                covered[r] = changed = True
+    if not all(covered):
+        raise _invalid(face_id, _ZERO_UNCOVERED)
+    return kept
 
 
 def _trim_bound(face_id, model, tol, rings, built):
     """Q6 ``trim_sag_bound``: the N1 chords' certified distance from the analytic trim (always
     reported, enforced only with tol.sag) plus every point N3 creates on the boundary: the cut
-    points' rounding (M2) and the D1 identifications' displacement (H1)."""
+    points' rounding (M2).  The D1 identifications move no lifted point (C1), so they add
+    nothing."""
     trim = max(_trim_sag(face_id, model, samples, tol, curve) for ring in rings for samples, curve in ring.edges)
-    if built.cut_rounding or built.identify:
-        trim = (trim + built.cut_rounding + built.identify) * (1.0 + 4.0 * _EPS)
+    if built.cut_rounding:
+        trim = (trim + built.cut_rounding) * (1.0 + 4.0 * _EPS)
     return float(trim)
 
 
@@ -1307,7 +1423,6 @@ def _lift_cylinder(model, face_id, tol, support, rings, extra):
         mesh = triangulate_rings(charts, lines)
         built = _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure)
         bound = _CylinderBound(cyl, k, ring_deltas, built, ring_rounding)
-        _check_identification(face_id, built, bound.rounding)
         per_triangle, tt, width = bound.per_triangle(built.triangles)
         failing = ~(per_triangle <= face_tolerance)
         if bool(np.any(failing)):
@@ -1323,40 +1438,41 @@ def _lift_cylinder(model, face_id, tol, support, rings, extra):
         added = np.concatenate((added, _bisection(face_id, tt, failing, len(added))))
         lines = added if extra is None else np.concatenate((extra, added))
     points, chart, triangles, sense = built.points, built.chart, built.triangles, built.sense
-    # Q7: the sign over each footprint (both ends of its theta range), rounding-thin exempt
+    # Q7: the sign over each footprint (both ends of its theta range); the float filter certifies
+    # (its bound covers its own rounding, C3: no margin admits anything), the rest exact
     if sense < 0:
         triangles = triangles[:, [0, 2, 1]]
     a, b, c = points[triangles[:, 0]], points[triangles[:, 1]], points[triangles[:, 2]]
     d1, d2 = b - a, c - a
     normal = _cross(d1, d2)
-    margin = 40.0 * _EPS * np.sqrt(np.sum(d1 ** 2, axis=1)) * np.sqrt(np.sum(d2 ** 2, axis=1)) + _UNDERFLOW
+    filter_bound = 40.0 * _EPS * np.sqrt(np.sum(d1 ** 2, axis=1)) * np.sqrt(np.sum(d2 ** 2, axis=1)) + _UNDERFLOW
     p = normal @ cyl.e1
     q = normal @ cyl.e2
     lo, hi = tt.min(axis=1), tt.max(axis=1)
     at_lo = sense * (p * np.cos(lo) + q * np.sin(lo))
     at_hi = sense * (p * np.cos(hi) + q * np.sin(hi))
-    positive = (at_lo > margin) & (at_hi > margin) & (width < math.pi)
-    exempt_count = _thin_decision(face_id, points, triangles, ~positive, lo, hi, cyl, 0.0, sense, bound.rounding)
+    positive = (at_lo > filter_bound) & (at_hi > filter_bound) & (width < math.pi)
+    zero = _thin_decision(face_id, points, triangles, ~positive, lo, hi, cyl, 0.0, sense)
     deviation = float(per_triangle.max())
+    triangles = _drop_zero(face_id, points, triangles, zero)
     trim = _trim_bound(face_id, model, tol, rings, built)
     return dt.FaceDisplayMesh(face_id, dt._frozen(points), dt._frozen(triangles), dt._frozen(chart.copy()), k,
-                              dt._frozen(built.source), int(sense), face_tolerance, deviation, trim, exempt_count)
+                              dt._frozen(built.source), int(sense), face_tolerance, deviation, trim, len(zero))
 
 
-def _thin_decision(face_id, points, triangles, undecided, lo, hi, chart, slope, sense, allowance):
-    """M1: every triangle the float filter cannot certify (the margin's underflow slack only
-    routes), decided by :func:`_thin_curved`; a fold refuses, the exempt ones are counted.  The
-    rounding-thin width limit is ``A_face`` of the mesh points (decided exactly): the stored
-    points' own representation, world-scaled by nature (a support-frame limit refused rounding
-    slivers of translated faces: measured, frustum with a hole at a lateral 1e5)."""
+def _thin_decision(face_id, points, triangles, undecided, lo, hi, chart, slope, sense):
+    """M1 / C3: every triangle the float filter cannot certify (the filter's bound and underflow
+    slack only route), decided by :func:`_thin_curved`; a triangle not certifiably positive refuses
+    (``TRIM_INVALID`` fold), the zero normals are returned (rows of ``triangles``: dropped and
+    counted, :func:`_drop_zero`).  No width limit, no margin (owner decision C3)."""
     rows = np.flatnonzero(undecided)
     if not len(rows):
-        return 0
-    exempt, folded = _thin_curved(points, triangles[rows], lo[rows], hi[rows], chart.e1, chart.e2, chart.a, slope,
-                                  sense, allowance)
+        return rows
+    zero, folded = _thin_curved(points, triangles[rows], lo[rows], hi[rows], chart.e1, chart.e2, chart.a, slope,
+                                sense)
     if bool(np.any(folded)):
         raise _invalid(face_id, _FOLD)
-    return int(np.count_nonzero(exempt))
+    return rows[zero]
 
 
 # ----------------------------------------------------------------------------- cone
@@ -1575,7 +1691,6 @@ def _lift_cone(model, face_id, tol, support, rings, extra):
         mesh = triangulate_rings(charts, lines)
         built = _assemble(face_id, rings, ring_points, charts, ring_chart, mesh, structure)
         bound = _ConeBound(cone, k, ring_deltas, ring_rho, built)
-        _check_identification(face_id, built, bound.rounding)
         per_triangle, tt, width = bound.per_triangle(built.triangles)
         failing = ~(per_triangle <= face_tolerance)
         if bool(np.any(failing)):
@@ -1592,13 +1707,13 @@ def _lift_cone(model, face_id, tol, support, rings, extra):
         lines = added if extra is None else np.concatenate((extra, added))
     points, chart, triangles, sense = built.points, built.chart, built.triangles, built.sense
     # Q7: the sign of n . (c(theta) - k a) over each footprint, exactly: both ends, and the
-    # sinusoid's minimum where it may lie inside; rounding-thin exempt
+    # sinusoid's minimum where it may lie inside; the float filter certifies, the rest exact (C3)
     if sense < 0:
         triangles = triangles[:, [0, 2, 1]]
     a, b, c = points[triangles[:, 0]], points[triangles[:, 1]], points[triangles[:, 2]]
     d1, d2 = b - a, c - a
     normal = _cross(d1, d2)
-    margin = (40.0 * _EPS * (1.0 + abs(cone.k)) * np.sqrt(np.sum(d1 ** 2, axis=1))
+    filter_bound = (40.0 * _EPS * (1.0 + abs(cone.k)) * np.sqrt(np.sum(d1 ** 2, axis=1))
               * np.sqrt(np.sum(d2 ** 2, axis=1))) + _UNDERFLOW
     p = sense * (normal @ cone.e1)
     q = sense * (normal @ cone.e2)
@@ -1609,14 +1724,15 @@ def _lift_cone(model, face_id, tol, support, rings, extra):
     at_hi = p * cos_hi + q * sin_hi + level
     # the minimum of p cos + q sin lies inside (lo, hi) only if the slope is falling at lo and
     # rising at hi (footprint < pi); "possibly inside" within rounding is taken as inside
-    inside = (-p * sin_lo + q * cos_lo <= margin) & (-p * sin_hi + q * cos_hi >= -margin)
+    inside = (-p * sin_lo + q * cos_lo <= filter_bound) & (-p * sin_hi + q * cos_hi >= -filter_bound)
     bottom = level - np.hypot(p, q)
-    positive = (at_lo > margin) & (at_hi > margin) & (width < math.pi) & (~inside | (bottom > margin))
-    exempt_count = _thin_decision(face_id, points, triangles, ~positive, lo, hi, cone, cone.k, sense, bound.rounding)
+    positive = (at_lo > filter_bound) & (at_hi > filter_bound) & (width < math.pi) & (~inside | (bottom > filter_bound))
+    zero = _thin_decision(face_id, points, triangles, ~positive, lo, hi, cone, cone.k, sense)
     deviation = float(per_triangle.max())
+    triangles = _drop_zero(face_id, points, triangles, zero)
     trim = _trim_bound(face_id, model, tol, rings, built)
     return dt.FaceDisplayMesh(face_id, dt._frozen(points), dt._frozen(triangles), dt._frozen(chart.copy()), k,
-                              dt._frozen(built.source), int(sense), face_tolerance, deviation, trim, exempt_count)
+                              dt._frozen(built.source), int(sense), face_tolerance, deviation, trim, len(zero))
 
 
 # ----------------------------------------------------------------------------- entry
@@ -1631,12 +1747,14 @@ def _lift(model, face_id, tol, *, _extra_x=None):
         if not isinstance(support, (Plane, Cylinder, Cone)):
             raise _refuse("SUPPORT_UNSUPPORTED", face_id, "its support is not a plane, cylinder or cone")
         dt._check_support_domain(support)
-        loops = (face.loop, *face.holes)
         extra = _check_extra(_extra_x)
-        # budgets before any scan proportional to the trim (Codex N3 r2 L3): N2's ring cap, then
-        # its ring-point cap against the coedge count (each coedge gives at least one ring point)
-        if len(loops) > _slab.MAX_SLAB_RINGS:
-            raise _slab._too_complex(f"{dt._id_text(len(loops))} rings (MAX_SLAB_RINGS = {_slab.MAX_SLAB_RINGS})")
+        # budgets before any scan proportional to the trim (Codex N3 r2 L3): N2's ring cap (before
+        # the ring list is even built: Codex N3 r3 L2, memory O(cap)), then its ring-point cap
+        # against the coedge count (each coedge gives at least one ring point)
+        count = len(face.holes) + 1
+        if count > _slab.MAX_SLAB_RINGS:
+            raise _slab._too_complex(f"{dt._id_text(count)} rings (MAX_SLAB_RINGS = {_slab.MAX_SLAB_RINGS})")
+        loops = (face.loop, *face.holes)
         coedges = sum(len(loop) for loop in loops)
         if coedges > _slab.MAX_SLAB_RING_POINTS:
             raise _slab._too_complex(f"at least {dt._id_text(coedges)} ring points "
