@@ -68,6 +68,19 @@ All notable user-visible changes to ANYgeometry are documented here.
   P-image overlap exactly. No change on the bit-identity sets vs 5c4d38c (planar fuzz and corpus, cylinder and cone
   fuzz, every corpus plane, cylinder and cone face at both steps; tripod skins and the 400-face cylinder accepted).
 
+- N3 Codex round 5 (owner standing approval, recommended option): the lift's magnitude domain is symmetric (Codex r5
+  H1: a cone of height `float max` overflowed `height |axis|`, its slope became 0, and a face was accepted with an
+  understated `deviation_bound` and a folded triangle). Every ring-point coordinate and stored support number (origin,
+  axis, plane vectors, stored frame directions, radii, height, sweep, start angle) must be finite and at most `2**200`
+  in magnitude, else `OUT_OF_DOMAIN` ("a coordinate or support parameter is above 2**200 in magnitude, or not finite
+  (the lift's domain)"); a non-finite or underflowed cone slope or face tolerance is `OUT_OF_DOMAIN` too ("a derived
+  quantity of the lift is not finite, ..."; the docs' audit table shows every derived float quantity finite inside
+  the domain, the largest below `2**894`). Speed of the round-4 injectivity certificate restored without changing
+  any output: a scalar path for faces of at most 40 mesh points, exact normals shared between Q7 and the projection
+  check, Q7's tight filter and a separating-axis filter on planes. No change on the
+  bit-identity sets vs 75c52fc (planar, cylinder and cone fuzz and every corpus face at both steps; tripod skins and the
+  400-face cylinder accepted). Timing vs 5c4d38c (loaded PC, totals): 400-face cylinder +5 / +6 %, polygon400 +12 / +2
+  %, tripod +10 / +10 % (round 4: +13 / +16, +19 / +8, +8 / +13 %).
 - N2 round 8 (docs and tests only; supersedes the N3 wording of rounds 3-7 below): N2's contract states only what N2 guarantees (certified 2D
   mesh, closure coverage, `cut_ends`/`cut_fraction` as provenance, input/trust model, refusals,
   area, budgets) plus one sentence: lifting onto a support is N3's contract and N3 must not rely on

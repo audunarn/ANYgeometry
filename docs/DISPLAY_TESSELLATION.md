@@ -981,7 +981,7 @@ changed.
 |---|---|
 | `SUPPORT_UNSUPPORTED` | "the face has an explicit parameterization"; "its support is not a plane, cylinder or cone" |
 | `TRIM_WINDS_SUPPORT` | "a loop winds around the support's axis" (its steps, the closing one included, sum to more than pi in magnitude); "the trim's azimuth extent is not certifiably below 2 pi (the support would be covered twice)" (R2 H2); "the face uses one edge twice (a seam or slit)" |
-| `OUT_OF_DOMAIN` | N1's and N2's domain refusals (N2's ring cap and its ring-point cap against the coedge count, "trim too complex for display: at least N ring points (MAX_SLAB_RING_POINTS = ...)", before the seam scan, R2 L3; the ring-point cap while the rings are sampled, with N2's text "... N ring points (...)", R1 M4); "a nonzero coordinate or support parameter is below 2**-200 in magnitude (the lift's domain)" (R2 M1/M2); "its plane's vectors are parallel to within a sine of 1e-12"; "its refinement needs more than 200000 slab lines (too complex)"; "its trim reaches the cone's apex (...)" |
+| `OUT_OF_DOMAIN` | N1's and N2's domain refusals (N2's ring cap and its ring-point cap against the coedge count, "trim too complex for display: at least N ring points (MAX_SLAB_RING_POINTS = ...)", before the seam scan, R2 L3; the ring-point cap while the rings are sampled, with N2's text "... N ring points (...)", R1 M4); "a nonzero coordinate or support parameter is below 2**-200 in magnitude (the lift's domain)" (R2 M1/M2); "a coordinate or support parameter is above 2**200 in magnitude, or not finite (the lift's domain)" and "a derived quantity of the lift is not finite, or a nonzero one rounded to 0 (the lift's domain)" (R5 H1); "its plane's vectors are parallel to within a sine of 1e-12"; "its refinement needs more than 200000 slab lines (too complex)"; "its trim reaches the cone's apex (...)" |
 | `EDGE_UNSUPPORTED` | N1's edge refusals; "a boundary chord deviates from the plane / cylinder / cone by up to X, above the face tolerance T"; "edge E's drawn chords leave its curve by up to X, above the sag S" (only with `tol.sag`) |
 | `TRIM_INVALID` (trims) | "a loop has no coedges"; "consecutive coedges do not meet bit for bit"; "two ring points coincide in the chart"; N2's trim refusals (crossing, touching rings, ...) |
 | `TRIM_INVALID` (uncertified lifts) | "two mesh vertices coincide in the chart (lift not certified: ...)"; "the mesh boundary is not the chain of the ring chords (lift not certified)"; "a mesh edge is not shared by exactly two oppositely oriented triangles (lift not certified)"; "a chart triangle is not strictly counter-clockwise (lift not certified)"; "a lifted triangle folds against the face normal (lift not certified)"; "a lifted triangle's deviation bound exceeds the face tolerance (lift not certified)"; "merged cut points, or the ends of a boundary interval their merge cancels, are not bitwise equal in 3D (lift not certified: a gap in the trim)" (R3 C1); "a zero-area lifted triangle is not covered by the triangles kept beside it (lift not certified: it cannot be dropped)" (R3 C3); "the lifted boundary is not simple: its projection back to the chart crosses or touches itself (lift not certified: lifted triangles may overlap)", "the lifted boundary's loops are not nested as the trim's: not exactly one positively oriented loop in the projection back to the chart (lift not certified)", "a lifted triangle's projection back to the chart is not positively oriented (lift not certified: lifted triangles may overlap)", "a lifted point is too close to the support's axis, or too far from its chart point, for the projection back to the chart (lift not certified)" (R4); "an arithmetic error in the lift" |
@@ -1039,7 +1039,8 @@ planar, cylinder and cone faces that rounding alone refused are accepted.
 - **M1 + M2 (magnitude-dependent arithmetic).** Chosen: a domain guard for the float arithmetic
   plus scale-invariant exact decisions. Domain: every nonzero ring-point coordinate and support
   parameter (origin, axis or plane vectors, radii, height) is at least `2^-200` in magnitude, else
-  `OUT_OF_DOMAIN` (N1 bounds them above by `MAX_DISPLAY_COORDINATE`). Why: then a nonzero
+  `OUT_OF_DOMAIN` (N1 bounds the coordinates, the origin and the plane vectors above by
+  `MAX_DISPLAY_COORDINATE`, not a cone's height or radii: the upper side is round 5's, below). Why: then a nonzero
   difference of two such numbers is at least `2^-253` and a product of up to four is normal, so the
   relative error analyses of the filters and bounds hold for every input-derived quantity; the
   guard costs nothing for real models (rounding residues such as `6e-17` are far inside) and is
@@ -1288,3 +1289,110 @@ Remaining assumption (documented, as for the float filters since N3b): the libm 
 `sin` within a few ulps in the float filters and in the boxes that prune candidate pairs; every
 decision the filters cannot make is exact (rationals; the azimuth enclosures of (i)'s fallback are
 the fixed-point ones of C3).
+
+### Codex round 5 (R5): the magnitude domain, upper side; speed of the R4 certificate
+
+`tests/test_display_tessellation_lift_n3r5.py` holds the reproduction (9 of its 13 H1 tests fail on
+75c52fc, `n3r5-old-run.txt`; the other 4 are acceptance checks; 5 more test the P1 scalar path
+against the array path). Codex's r5 High: a topology-valid
+cone face (`radius_end = 1e307`, `height = float max`) for which `height |axis|` overflowed, so
+`_ConeChart` computed the slope `k = 0` (exactly about 0.0556); the face was accepted with
+`deviation_bound` 3.23e-4 against a paired deviation of 3.76e-4 at a returned vertex, and its first
+triangle folds against the exact cone normal. The class: R2 M1/M2 bounded the magnitudes from below
+only; N1 bounds the ring coordinates, the origin and the plane vectors by 1e9 but not a cone's
+height or radii or a cylinder's radius.
+
+**Decision (owner standing approval, recommended option): the symmetric upper guard.** Every
+ring-point coordinate and every stored support number (origin, axis, plane vectors, the stored
+radial and circumferential directions, radii, height, sweep and start angle) must be finite and at
+most `2^200` in magnitude, else `OUT_OF_DOMAIN` ("a coordinate or support parameter is above
+2**200 in magnitude, or not finite (the lift's domain)"), checked with the lower side, before any
+lift arithmetic on them (`_check_magnitudes`). In defence in depth (the audit shows they cannot
+fire inside the domain): the cone slope must be finite and nonzero when `r1 != r0`, and a cylinder's
+or cone's `T_face` finite, else `OUT_OF_DOMAIN` ("a derived quantity of the lift is not finite, or
+a nonzero one rounded to 0 (the lift's domain)", `_check_derived`). The Codex cone is refused by the
+guard; with the guard bypassed the slope check alone refuses it; with both bypassed the old mesh
+comes back and fails the exact-slope oracle (tests). The same face shape with in-domain parameters
+(the Codex slope at heights 9e59 and `2^200`, and a nearly cylindrical `k = 2^-180`) is accepted
+and passes the independent cone oracle (exact slope, deviation, footprint orientation, no overlap).
+
+**Audit of every derived float quantity inside the domain.** Domain facts: ring points, mesh points
+(cuts on ring chords) and the origin within `2^30` (N1), so `|X - o|`, `h`, the frame coordinates
+`x, y` within `2^32`; the axis and stored frame unit to 1e-9 (N1); `r, r0, r1, |height|` in
+`[2^-200, 2^200]` (or a zero radius: the apex rule); the display angle at most pi / 2 (N1); chart
+azimuths within `2^4` (each ring's steps sum below pi, holes shifted onto the outer sheet); every
+nonzero input at least `2^-200`, every nonzero difference of inputs at least `2^-252`. Underflow:
+every positive bound is a sum that contains `A_face >= 32 eps max |X| >= 2^-250` and is raised by
+`1 + 8 eps` at the end, so the absolute loss of a positive term underflowing (at most a few
+`2^-1074` per operation, a few hundred operations) is absorbed; every float filter carries an
+underflow slack and only routes to an exact decision (R2).
+
+| quantity | where | range inside the domain | outcome |
+|---|---|---|---|
+| cone slope `k = (r1 - r0) / (height |axis|)` | `_ConeChart` | denominator in `[2^-201, 2^201]`; `|k|` in `[2^-453, 2^402]`, exactly 0 iff `r1 = r0`; its relative error the stated `8 eps` (no over/underflow) | proven; also checked (`_check_derived`): the r5 High |
+| `rho = r0 + k h`, `rho_rounding` | cone chart, bounds | `<= 2^435` | proven finite |
+| `T_face = r_max (angle + a)^2 / 8 + residual` | cylinder, cone | `<= 2^202 + residual` | proven; also checked |
+| plane sine `|u x v| / (|u| |v|)`, `alpha` | `_PlaneChart` | products of two inputs in `[2^-400, 2^62]`, normal; `alpha <= 2^-9` (sine >= 1e-12) | proven (R2) |
+| `A_face`, `A_loc` (cylinder, cone, plane) | `rounding`, `local_rounding` | `<= 2^436` | proven finite |
+| boundary-chord bounds `rho dT^2 / 8 + |k| dT dH / 4` | step (5) | `<= 2^441` | proven finite |
+| cylinder Taylor bound `E(T)` (variances, `r kt`, edge maxima `gap^2 / (4 tau^2)`) | `_CylinderBound` | `<= 2^212`; the quotient only where `tau^2 > 0`, at most `tau^2 / 4` | proven finite |
+| cone bound `H(w)`: `D_ij`, `P_i`, `det = 4 D01 D02 - m^2`, `det_error`, `flat^2`, the critical point | `_ConeBound` | `D, P <= 2^446`, every product `<= 2^894` (the module's largest float value; `2^130` headroom), the critical point only where `det > 1e-6 flat^2` (condition at most 4e6) | proven finite |
+| offsets `delta = |X - S(c)|` (squared norms) | `offsets`, `local_offsets` | `S(c) <= 2^436`, squares `<= 2^874`; underflow by `_norms` (R2) | proven |
+| Q7 filters (`40 eps (1 + |k|) |d1| |d2|`, `level = -k n . a`, `hypot(p, q)`) | `_lift_cylinder`, `_lift_cone` | `|d| <= 2^33`, `|n| <= 2^67`, values `<= 2^470` | proven finite; undecided go exact |
+| exact Q7 / projection (`kerr = 8 eps |k|`, `E`) | `_thin_curved` | rationals of the stored floats; `kerr` valid because `k` is computed without over/underflow | exact |
+| E2 join threshold `SNAP (max(1, |theta|) + reach / radius)` and `_check_extent`'s rounding | `_join`, `_check_extent` | `reach <= 2^35`; `radius = r >= 2^-200` (cylinder) or `> 8 eps |r0| >= 2^-252` (cone), so `<= 2^288`; only for a cone whose apex is the support origin (`r0 = 0`, `radius > 8 eps |k| H`) can it overflow (an axial reach `H` near the cancellation level) | finite, except that apex case: there the join or `_check_extent` (infinite rounding) refuses (fail closed; a large threshold only joins more or refuses) |
+| refinement slab middle `(left + right) / 2` | `_bisection` | chart azimuths `<= 2^4` | proven; an unsplittable slab refuses |
+| projection P (R4): `err`, `rho`, `aerr = 2.2 err / rho + ...`, boxes, product filters | `_CurvedProjection`, `_PlaneProjection`, `_check_boundary` | `err <= 2^35`, `rho > 16 err`, `aerr <= 2^5`, products `<= 2^140` | proven finite |
+| plane exact bound, `_sqrt_up` | `exact_bound` | rationals; rounded up (R2) | exact |
+| cut rounding `4 eps |(|A| + |B|)|` | `_cut_rounding` | `<= 2^-17` | proven |
+| trim sag | N1's functions (N1's domain) | N1 | unchanged |
+
+**Q7 and the projection on a cone use consistent slopes.** `P = (azimuth, axial)` does not involve
+`k`: its Jacobian sign on a lifted triangle is `n . c(theta)` (radial). Q7 and the deviation bounds
+use the one slope `_ConeChart.k`, within `8 eps |k|` of the exact one inside the domain (the exact
+fallback carries that `kerr`); the oracle uses the exact slope. The two certificates are separate
+and both must pass, so an accepted cone triangle satisfies both: Q7's `n . (c - k a) > 0` over its
+footprint and `n . c > 0` over its P-azimuth range (a test checks both exactly at every vertex of an
+accepted frustum mesh). The Codex triangle passed the projection check correctly (its radial
+Jacobian is positive) and Q7 only because `k` had become 0.
+
+**Speed (P1; the R4 certificate cost ~0.25 ms per face).** No published value changes; every float
+filter still only routes to an exact predicate:
+
+- a scalar path (`_SMALL_POINTS = 40` mesh points or fewer: the 400-face cylinder's faces): the same
+  float quantities on Python floats (the same formulas and error bounds; `math`'s `cos`, `sin`,
+  `atan2`, `hypot` within the few ulps already assumed), the same filters, the exact predicates
+  inherited from the array classes, the same checks in the same order with the same texts; a chain
+  with two tails of equal computed P (the bitwise identification) takes the array path;
+- the exact normals Q7 already computed are shared with the projection certificate (`_cached_normals`;
+  every use is a sign homogeneous in the normal);
+- on a plane, (i)'s undecided triangles go through Q7's tight filter (`_tight_dot`, the reference
+  `e1 x e2` within `_cross_error`) before the exact decision: the polygon400 slivers (625) decide in
+  floats;
+- a separating-axis filter along each segment for non-adjacent plane boundary pairs (`_beyond`: both
+  ends of one segment strictly beyond an end of the other in its direction, from differences relative
+  to that end): the ~520 pairs of pieces of one chord separated by ulp-short chain edges decide in
+  floats;
+- `_fixed` by shifts, the box sweep's height test on sorted copies.
+
+Changed results vs 75c52fc (`n3r2_bits.py`, `n3r5-bits-compare.txt`): none. Every face of the
+bit-identity sets (1200 planar fuzz faces and the planar corpus/bench faces, 763 cylinder and 447
+cone fuzz faces, every corpus plane, cylinder and cone face at both steps) has the same outcome
+(refusal code and text) and, when accepted, bit-identical output; the tripod skins and the
+400-face cylinder stay accepted. No face of these sets has a parameter above `2^200`. Scalar and
+array paths: random small chains and triangles on a plane and a cylinder give the same outcome on
+both (tests). Fuzz on the r5 tree (0 oracle failures, 0 raw exceptions each, the same accept counts
+as r4): planar 1134 / 1200 (`n3r5-planar-fuzz.txt`), cylinder 1148 / 1177
+(`n3r5-cylinder-fuzz.txt`), cone 947 / 1046 (`n3r5-cone-fuzz.txt`). The lift test files also pass on
+Python 3.13.9 (`n3r5-py313-run.txt`).
+
+Timing (`n3r5-bench.txt`: 4 runs, two bench invocations of 2 interleaved rounds each, one session;
+the PC was heavily loaded, absolute numbers about 1.5x the r4 session's; totals, medians, 7.5 /
+22.5 deg; 5c4d38c -> 75c52fc -> r5): tripod 18 skins 75.9 -> 82.2 -> 83.5 (+10 %) / 75.4 -> 84.9 ->
+83.1 (+10 %); 400-face cylinder 1164 -> 1317 -> 1217 (+5 %) / 1145 -> 1331 -> 1212 (+6 %);
+polygon400_holes20 96.0 -> 114.0 -> 107.4 (+12 %) / 95.0 -> 102.6 -> 96.6 (+2 %). The certificate
+itself (warm per-function medians): 400-face cylinder 139 -> 37 ms, polygon400 13.1 -> 4.6 ms (7.5
+deg), tripod 5.8 -> 5.6 ms. What remains is the certificate's own work on the array path: the
+tripod skins (more than 40 points per face, where the arrays are faster than the scalar path,
+measured 14.7 ms scalar) and the polygon's 5594-edge chain (the box sweep 1.4 ms, about 80 000
+u-overlapping candidates for 6841 box pairs; a uniform grid measured slower, 5.0 ms).

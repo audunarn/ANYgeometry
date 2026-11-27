@@ -180,6 +180,14 @@ oriented, (ii) the P-image of the lifted boundary is a set of disjoint simple cl
 exactly one of them positively oriented (the trim's nesting).  A local homeomorphism of the chart
 region whose boundary maps injectively onto curves of winding number at most 1 has degree at most 1,
 so no two published triangles' P-images (hence lifted triangles) share an interior point.
+
+Codex round 5 (owner standing approval, the recommended option; docs "Codex round 5"): the magnitude
+domain is symmetric: every ring-point coordinate and stored support number at most ``2^200`` and
+finite (:func:`_check_magnitudes`; a cone's ``height |axis|`` had overflowed and its slope became 0),
+with an audit of every derived float quantity (docs table) and defensive checks of the slope and
+T_face (:func:`_check_derived`).  P1: the round-4 certificate on small faces runs on Python floats
+(:func:`_check_projection_small`, the same decisions), shares Q7's exact normals
+(:func:`_cached_normals`) and gains two rigorous plane filters (:func:`_tight_dot`, :func:`_beyond`).
 """
 from __future__ import annotations
 
@@ -212,6 +220,11 @@ _REFINE_ROUNDS = 8
 #: the lift's magnitude domain (Codex N3 r2 M1/M2): every nonzero ring-point coordinate and support
 #: parameter is at least this in magnitude (N1 bounds them above by MAX_DISPLAY_COORDINATE)
 _MIN_MAGNITUDE = 2.0 ** -200
+#: the upper side (Codex N3 r5 H1): every ring-point coordinate and support parameter (origin,
+#: axis, frame vectors, radii, height, sweep, start angle) is at most this in magnitude; with the
+#: lower side, every derived float quantity of the module is finite, and a nonzero one normal (docs,
+#: "Codex round 5": the audit; the largest is the cone bound's determinant, below 2^900)
+_MAX_MAGNITUDE = 2.0 ** 200
 _TINY_NORMAL = 2.0 ** -1022
 #: fixed-point bits of the exact fallback's cosine and sine enclosures (C3, :func:`_cos_sin`)
 _COS_SIN_BITS = 128
@@ -242,6 +255,16 @@ _EXTENT = "the trim's azimuth extent is not certifiably below 2 pi (the support 
 def _magnitude_text(face_id):
     return (f"face {dt._id_text(face_id)}: a nonzero coordinate or support parameter is below 2**-200 in magnitude "
             f"(the lift's domain)")
+
+
+def _magnitude_above_text(face_id):
+    return (f"face {dt._id_text(face_id)}: a coordinate or support parameter is above 2**200 in magnitude, or not "
+            f"finite (the lift's domain)")
+
+
+def _derived_text(face_id):
+    return (f"face {dt._id_text(face_id)}: a derived quantity of the lift is not finite, or a nonzero one rounded to "
+            f"0 (the lift's domain)")
 
 
 # ----------------------------------------------------------------------------- arithmetic helpers
@@ -328,6 +351,22 @@ def _exact_normals(points, rows):
     return normals, edges2, q
 
 
+def _cached_normals(points, rows, cache):
+    """:func:`_exact_normals` of the triangles ``rows`` (their normals only), reusing and filling
+    ``cache`` (a dict keyed by the vertex triple, or ``None``): Q7 and the projection certificate
+    decide the same undecided triangles exactly (Codex N3 r5 P1).  Every use is a sign of an
+    expression homogeneous in the normal, so normals over different power-of-two scales mix."""
+    rows = np.asarray(rows)
+    if cache is None:
+        return _exact_normals(points, rows)[0]
+    keys = [tuple(r) for r in rows.tolist()]
+    missing = [i for i, key in enumerate(keys) if key not in cache]
+    if missing:
+        for i, n in zip(missing, _exact_normals(points, rows[missing])[0]):
+            cache[keys[i]] = n
+    return [cache[key] for key in keys]
+
+
 def _refuse(code, face_id, text):
     return dt.DisplayTrimRefused(code, f"face {dt._id_text(face_id)}: {text}")
 
@@ -412,17 +451,40 @@ def _support_parameters(support):
     return [*support.origin, *support.axis, support.radius_start, support.radius_end, support.height]
 
 
+def _upper_parameters(support):
+    """Every stored number of the support (the upper guard also covers what the lift never reads:
+    the stored frame vectors, sweep and start angle, which N1 bounds already)."""
+    if isinstance(support, Plane):
+        return _support_parameters(support)
+    return [*_support_parameters(support), *support.radial_direction, *support.circumferential_direction,
+            support.sweep_angle, support.start_angle]
+
+
 def _check_magnitudes(face_id, support, rings):
-    """The lift's magnitude domain (Codex N3 r2 M1/M2, docs): every nonzero ring-point coordinate
-    and support parameter is at least ``2^-200`` in magnitude (N1 bounds them above), else
-    ``OUT_OF_DOMAIN``.  Then a nonzero difference of two such numbers is at least ``2^-253`` and a
-    product of up to four of them is normal, so the float filters' and bounds' relative error
-    analyses hold; what still underflows (derived quantities) is decided exactly or bounded by
-    :func:`_norms`."""
+    """The lift's magnitude domain (Codex N3 r2 M1/M2 and r5 H1, docs): every ring-point coordinate
+    and support parameter is at most ``2^200`` in magnitude and finite (r5: N1 bounds the ring
+    points, the origin and the plane vectors by 1e9, not a cone's height or radii: ``height |axis|``
+    overflowed and the slope became 0), and every nonzero one at least ``2^-200``, else
+    ``OUT_OF_DOMAIN`` (the upper side first).  Then a nonzero difference of two such numbers is at
+    least ``2^-253`` and a product of up to four of them is normal, so the float filters' and
+    bounds' relative error analyses hold; every derived float quantity is finite (docs, "Codex round
+    5", the audit table); what still underflows is decided exactly or bounded by :func:`_norms`."""
+    upper = np.abs(np.asarray(_upper_parameters(support), dtype=float))
+    if not (bool(np.all(upper <= _MAX_MAGNITUDE))
+            and all(bool(np.all(np.abs(r.points) <= _MAX_MAGNITUDE)) for r in rings)):
+        raise dt.DisplayDomainRefused(_magnitude_above_text(face_id))
     values = np.abs(np.concatenate([r.points.ravel() for r in rings]
                                    + [np.asarray(_support_parameters(support), dtype=float)]))
     if bool(np.any((values > 0.0) & (values < _MIN_MAGNITUDE))):
         raise dt.DisplayDomainRefused(_magnitude_text(face_id))
+
+
+def _check_derived(face_id, *values, nonzero=()):
+    """Codex N3 r5 H1 (defence in depth; the audit proves these cannot fire inside the domain): the
+    scalar derived quantities ``values`` finite, and each ``(value, exactly_nonzero)`` of
+    ``nonzero`` not rounded to 0 when its exact value is nonzero, else ``OUT_OF_DOMAIN``."""
+    if not all(math.isfinite(v) for v in values) or any(v == 0.0 and exact for v, exact in nonzero):
+        raise dt.DisplayDomainRefused(_derived_text(face_id))
 
 
 def _check_extent(face_id, charts, radius, reach):
@@ -931,7 +993,33 @@ def _plane_point_bounds(face_id, plane, points, chart, face_tolerance, rounding,
     return bounds
 
 
-def _plane_orientation(face_id, plane, points, rows, sense):
+def _tight_dot(points, rows, nf, dn, sense):
+    """The tight filter of :func:`_plane_orientation`: ``sense nT . N`` of the triangles ``rows``
+    (``nT`` the stored points' normal, each component a 2 x 2 orientation bounded by Shewchuk's
+    ``ccwerrboundA``) against a reference ``N`` known as the floats ``nf`` within ``dn`` per
+    component, and a bound of its error (docstring of :func:`_plane_orientation`)."""
+    a, b, c = points[rows[:, 0]], points[rows[:, 1]], points[rows[:, 2]]
+    d1, d2 = b - a, c - a
+    left = np.column_stack((d1[:, 1] * d2[:, 2], d1[:, 2] * d2[:, 0], d1[:, 0] * d2[:, 1]))
+    right = np.column_stack((d1[:, 2] * d2[:, 1], d1[:, 0] * d2[:, 2], d1[:, 1] * d2[:, 0]))
+    nt = left - right
+    perm = _ORIENT_BOUND * (np.abs(left) + np.abs(right))
+    terms = nt * nf
+    value = sense * terms.sum(axis=1)
+    error = ((perm @ np.abs(nf) + (np.abs(nt) + perm) @ dn + 2.0 * _EPS * np.abs(terms).sum(axis=1))
+             * (1.0 + 4.0 * _EPS) + _UNDERFLOW * (1.0 + float(np.abs(nf).sum())))
+    return value, error
+
+
+def _cross_error(u, v):
+    """A bound per component of the error of the float cross product ``u x v`` of two float
+    vectors (each a 2 x 2 determinant of exact inputs: ``ccwerrboundA`` without the differences)."""
+    u, v = np.asarray(u, dtype=float), np.asarray(v, dtype=float)
+    return _ORIENT_BOUND * np.array([abs(u[1] * v[2]) + abs(u[2] * v[1]), abs(u[2] * v[0]) + abs(u[0] * v[2]),
+                                     abs(u[0] * v[1]) + abs(u[1] * v[0])]) + _UNDERFLOW
+
+
+def _plane_orientation(face_id, plane, points, rows, sense, cache=None):
     """Q7 on a plane for the triangles ``rows`` the first float filter cannot certify (M1; Codex N3
     r2 M1, P1): the sign of ``sense (nT . (u x v))``, ``nT`` the exact normal of the stored points,
     decided by a second, tight filter and else exactly.  Filter: each component of ``nT`` is a
@@ -944,23 +1032,13 @@ def _plane_orientation(face_id, plane, points, rows, sense):
     dropped and counted by the caller, :func:`_drop_zero`), anything else a fold
     (``TRIM_INVALID``).  The reference ``u x v`` is exact here, so this is the exact sign, no
     margin.  Returns the positions (in ``rows``) of the zero normals."""
-    a, b, c = points[rows[:, 0]], points[rows[:, 1]], points[rows[:, 2]]
-    d1, d2 = b - a, c - a
-    left = np.column_stack((d1[:, 1] * d2[:, 2], d1[:, 2] * d2[:, 0], d1[:, 0] * d2[:, 1]))
-    right = np.column_stack((d1[:, 2] * d2[:, 1], d1[:, 0] * d2[:, 2], d1[:, 1] * d2[:, 0]))
-    nt = left - right
-    perm = _ORIENT_BOUND * (np.abs(left) + np.abs(right))
-    nf, dn = plane.normal_f, plane.normal_error
-    terms = nt * nf
-    value = sense * terms.sum(axis=1)
-    error = ((perm @ np.abs(nf) + (np.abs(nt) + perm) @ dn + 2.0 * _EPS * np.abs(terms).sum(axis=1))
-             * (1.0 + 4.0 * _EPS) + _UNDERFLOW * (1.0 + float(np.abs(nf).sum())))
+    value, error = _tight_dot(points, rows, plane.normal_f, plane.normal_error, sense)
     if bool(np.any(value < -error)):
         raise _invalid(face_id, _FOLD)
     rest = np.flatnonzero(~(value > error))
     if not len(rest):
         return rest
-    normals, _, _ = _exact_normals(points, rows[rest])
+    normals = _cached_normals(points, rows[rest], cache)
     reference = plane.exact_normal
     zero = []
     for position, n in zip(rest.tolist(), normals):
@@ -1008,7 +1086,7 @@ def _cos_sin(theta):
             Fraction(sine - error, scale), Fraction(sine + error, scale))
 
 
-def _thin_curved(points, rows, lo, hi, e1, e2, axis, k, sense, frame=None):
+def _thin_curved(points, rows, lo, hi, e1, e2, axis, k, sense, frame=None, cache=None):
     """M1 / C3 on a cylinder (``k = 0``) or cone: the orientation of each triangle the float filter
     cannot certify, over its footprint ``[lo, hi]``, from the EXACT normal ``n`` of its stored
     points (integers, :func:`_exact_normals`) and an ENCLOSURE of the support normal (owner
@@ -1043,7 +1121,7 @@ def _thin_curved(points, rows, lo, hi, e1, e2, axis, k, sense, frame=None):
     f2)`` exactly, the Jacobian of the projection back to the chart (``k`` must then be 0)."""
     zero = np.zeros(len(rows), dtype=bool)
     folded = np.zeros(len(rows), dtype=bool)
-    normals, _, _ = _exact_normals(points, np.asarray(rows))
+    normals = _cached_normals(points, rows, cache)
     slope = Fraction(float(k))
     if frame is None:
         frame = [[Fraction(float(x)) for x in vector] for vector in (e1, e2, axis)]
@@ -1130,9 +1208,10 @@ def _lift_plane(model, face_id, tol, support, rings, extra):
     # M1 / C3: every triangle the filter cannot certify is decided by a tight filter, else exactly;
     # a zero normal is dropped (the slack only routes: the undecided go exact)
     zero = np.zeros(0, dtype=np.int64)
+    normals = {}                    # exact normals, shared with the projection certificate (r5 P1)
     undecided = np.flatnonzero(~positive)
     if len(undecided):
-        zero = undecided[_plane_orientation(face_id, plane, points, triangles[undecided], sense)]
+        zero = undecided[_plane_orientation(face_id, plane, points, triangles[undecided], sense, normals)]
     bounds = _plane_point_bounds(face_id, plane, points, chart, face_tolerance, rounding, "TRIM_INVALID",
                                  lambda worst: _DEVIATION)
     per_triangle = np.max(bounds[triangles], axis=1)
@@ -1140,7 +1219,7 @@ def _lift_plane(model, face_id, tol, support, rings, extra):
     if not deviation <= face_tolerance:
         raise _invalid(face_id, _DEVIATION)
     triangles = _drop_zero(face_id, points, triangles, zero)
-    _check_projection(face_id, _PlaneProjection(plane, points), points, triangles, sense, built.chain)
+    _check_projection(face_id, _projection(plane, points, None, normals), points, triangles, sense, built.chain)
     trim = _trim_bound(face_id, model, tol, rings, built)
     return dt.FaceDisplayMesh(face_id, dt._frozen(points), dt._frozen(triangles), dt._frozen(chart.copy()), k,
                               dt._frozen(built.source), int(sense), face_tolerance, deviation, trim, len(zero))
@@ -1415,6 +1494,7 @@ def _lift_cylinder(model, face_id, tol, support, rings, extra):
     else:
         a = max(ring.allowance for ring in rings)
         face_tolerance = r * (tol.angle + a) ** 2 / 8 + float(model.tolerance.surface_residual)
+    _check_derived(face_id, face_tolerance)                 # Codex N3 r5 H1 (the audit: cannot fire)
     charts = cyl.charts(face_id, rings)
     ring_points = np.vstack([ring.points for ring in rings])
     _check_extent(face_id, charts, r, cyl.reach(rings))
@@ -1473,17 +1553,18 @@ def _lift_cylinder(model, face_id, tol, support, rings, extra):
     at_lo = sense * (p * np.cos(lo) + q * np.sin(lo))
     at_hi = sense * (p * np.cos(hi) + q * np.sin(hi))
     positive = (at_lo > filter_bound) & (at_hi > filter_bound) & (width < math.pi)
-    zero = _thin_decision(face_id, points, triangles, ~positive, lo, hi, cyl, 0.0, sense)
+    normals = {}                    # exact normals, shared with the projection certificate (r5 P1)
+    zero = _thin_decision(face_id, points, triangles, ~positive, lo, hi, cyl, 0.0, sense, normals)
     deviation = float(per_triangle.max())
     triangles = _drop_zero(face_id, points, triangles, zero)
-    _check_projection(face_id, _CurvedProjection(face_id, cyl, points, chart[:, 0]), points, triangles, sense,
+    _check_projection(face_id, _projection(cyl, points, chart[:, 0], normals, face_id), points, triangles, sense,
                       built.chain)
     trim = _trim_bound(face_id, model, tol, rings, built)
     return dt.FaceDisplayMesh(face_id, dt._frozen(points), dt._frozen(triangles), dt._frozen(chart.copy()), k,
                               dt._frozen(built.source), int(sense), face_tolerance, deviation, trim, len(zero))
 
 
-def _thin_decision(face_id, points, triangles, undecided, lo, hi, chart, slope, sense):
+def _thin_decision(face_id, points, triangles, undecided, lo, hi, chart, slope, sense, cache=None):
     """M1 / C3: every triangle the float filter cannot certify (the filter's bound and underflow
     slack only route), decided by :func:`_thin_curved`; a triangle not certifiably positive refuses
     (``TRIM_INVALID`` fold), the zero normals are returned (rows of ``triangles``: dropped and
@@ -1492,7 +1573,7 @@ def _thin_decision(face_id, points, triangles, undecided, lo, hi, chart, slope, 
     if not len(rows):
         return rows
     zero, folded = _thin_curved(points, triangles[rows], lo[rows], hi[rows], chart.e1, chart.e2, chart.a, slope,
-                                sense)
+                                sense, cache=cache)
     if bool(np.any(folded)):
         raise _invalid(face_id, _FOLD)
     return rows[zero]
@@ -1680,6 +1761,9 @@ def _lift_cone(model, face_id, tol, support, rings, extra):
     else:
         a = max(ring.allowance for ring in rings)
         face_tolerance = cone.r * (tol.angle + a) ** 2 / 8 + float(model.tolerance.surface_residual)
+    # Codex N3 r5 H1: the slope finite and nonzero for a true cone (``height |axis|`` overflowed to
+    # inf and gave k = 0 before the upper guard; the audit shows this cannot fire inside the domain)
+    _check_derived(face_id, cone.k, face_tolerance, nonzero=((cone.k, cone.r1 != cone.r0),))
     ring_points = np.vstack([ring.points for ring in rings])
     _check_apex(face_id, model, support, cone, ring_points)
     charts = cone.charts(face_id, rings)
@@ -1750,10 +1834,11 @@ def _lift_cone(model, face_id, tol, support, rings, extra):
     inside = (-p * sin_lo + q * cos_lo <= filter_bound) & (-p * sin_hi + q * cos_hi >= -filter_bound)
     bottom = level - np.hypot(p, q)
     positive = (at_lo > filter_bound) & (at_hi > filter_bound) & (width < math.pi) & (~inside | (bottom > filter_bound))
-    zero = _thin_decision(face_id, points, triangles, ~positive, lo, hi, cone, cone.k, sense)
+    normals = {}                    # exact normals, shared with the projection certificate (r5 P1)
+    zero = _thin_decision(face_id, points, triangles, ~positive, lo, hi, cone, cone.k, sense, normals)
     deviation = float(per_triangle.max())
     triangles = _drop_zero(face_id, points, triangles, zero)
-    _check_projection(face_id, _CurvedProjection(face_id, cone, points, chart[:, 0]), points, triangles, sense,
+    _check_projection(face_id, _projection(cone, points, chart[:, 0], normals, face_id), points, triangles, sense,
                       built.chain)
     trim = _trim_bound(face_id, model, tol, rings, built)
     return dt.FaceDisplayMesh(face_id, dt._frozen(points), dt._frozen(triangles), dt._frozen(chart.copy()), k,
@@ -1822,9 +1907,10 @@ def _fixed(vector, k):
     out = []
     for x in vector:
         n, d = float(x).as_integer_ratio()
-        if (1 << k) % d:                                    # cannot happen with _scale_bits' k
+        shift = k - (d.bit_length() - 1)                    # d is a power of two
+        if shift < 0:                                       # cannot happen with _scale_bits' k
             raise ArithmeticError("a value is not on the exact scale")
-        out.append(n * ((1 << k) // d))
+        out.append(n << shift)
     return out
 
 
@@ -1888,7 +1974,7 @@ class _PlaneProjection:
         if hit is None:
             if self._o is None:
                 self._setup()
-            d = [x - y for x, y in zip(_fixed(self.points[i], self._k), self._o)]
+            d = [x - y for x, y in zip(_fixed(self.points[i].tolist(), self._k), self._o)]
             hit = (sum(x * y for x, y in zip(d, self._e1)), sum(x * y for x, y in zip(d, self._e2)))
             self._cache[i] = hit
         return hit
@@ -1921,7 +2007,13 @@ class _PlaneProjection:
             bound = (nw[0] * e[1:] + nw[1:] * e[0] + 2.0 * e[0] * e[1:] + 2.0 * _EPS * nw[0] * nw[1:]) * (
                 1.0 + 64.0 * _EPS) + _UNDERFLOW
             return ((o[0] > bound[0]) & (o[1] > bound[1])) | ((o[0] < -bound[0]) & (o[1] < -bound[1]))
-        return side(p, q, r, s) | side(r, s, p, q)
+        out = side(p, q, r, s) | side(r, s, p, q)
+        rest = np.flatnonzero(~out)
+        if len(rest):
+            p, q, r, s = p[rest], q[rest], r[rest], s[rest]
+            out[rest] = (_beyond(self.points, rows, p, q, r, s) | _beyond(self.points, rows, q, p, r, s)
+                         | _beyond(self.points, rows, r, s, p, q) | _beyond(self.points, rows, s, r, p, q))
+        return out
 
     def adjacent_meet(self, a, b, c):
         pb, pa, pc = self.exact(b), self.exact(a), self.exact(c)
@@ -1956,6 +2048,23 @@ class _PlaneProjection:
         P(v))`` (positive: counter-clockwise)."""
         pv, pw, pu = self.exact(vertex), self.exact(nxt), self.exact(prev)
         return _sign(_orient_points(pv, pw, pu))
+
+
+def _beyond(points, rows, a, b, x, y):
+    """Float filter (Codex N3 r5 P1, a separating axis along a segment): True where ``x`` and ``y``
+    lie certainly strictly beyond ``b`` in the direction ``a -> b`` of the plane P-images, ``(P(x) -
+    P(b)) . (P(b) - P(a)) > 0`` and the same for ``y``.  The segment ``P(a) P(b)`` has ``(X - P(b))
+    . (P(b) - P(a)) <= 0`` and the segment ``P(x) P(y)`` (P affine) has it positive throughout: they
+    are disjoint.  Differences relative to ``b`` (:func:`_differences`), so a pair separated by an
+    ulp-short chain edge (pieces of one chord, the polygon400 case) decides in floats; the product
+    bound is the rule above."""
+    line, el = _differences(points, b, a, rows)
+    W, e = _differences(points, np.stack((x, y)), b, rows)
+    nl = np.abs(line[:, 0]) + np.abs(line[:, 1])
+    nw = np.abs(W[..., 0]) + np.abs(W[..., 1])
+    dot = W[..., 0] * line[:, 0] + W[..., 1] * line[:, 1]
+    bound = (nl * e + nw * el + 2.0 * el * e + 2.0 * _EPS * nl * nw) * (1.0 + 64.0 * _EPS) + _UNDERFLOW
+    return (dot[0] > bound[0]) & (dot[1] > bound[1])
 
 
 def _orient_points(a, b, c):
@@ -2016,7 +2125,7 @@ class _CurvedProjection:
         if hit is None:
             if self._m is None:
                 self._setup()
-            d = [x - y for x, y in zip(_fixed(self.points[i], self._k), self._o)]
+            d = [x - y for x, y in zip(_fixed(self.points[i].tolist(), self._k), self._o)]
             hit = tuple(sum(x * y for x, y in zip(d, row)) for row in self._m)
             self._cache[i] = hit
         return hit
@@ -2166,11 +2275,7 @@ def _projection_triangles(face_id, proj, points, triangles, sense):
         undecided = np.flatnonzero(~(value > 24.0 * _EPS * lengths + _UNDERFLOW))
         if not len(undecided):
             return
-        normals, _, _ = _exact_normals(points, triangles[undecided])
-        reference = proj.normal
-        for n in normals:
-            if not sense * (n[0] * reference[0] + n[1] * reference[1] + n[2] * reference[2]) > 0:
-                raise _invalid(face_id, _PROJECTED)
+        _projection_exact_plane(face_id, proj, points, triangles[undecided], sense)
         return
     # curved: the triangle's P-azimuth range, its vertices' azimuths widened by their bounds
     u, aerr = proj.u[triangles], proj.aerr[triangles]
@@ -2185,13 +2290,40 @@ def _projection_triangles(face_id, proj, points, triangles, sense):
     rows = np.flatnonzero(~positive)
     if not len(rows):
         return
-    # exact: the vertices' exact azimuths inside [lo, hi] (no libm assumption), then the sign of
-    # n . (cos t f1 + sin t f2) over [lo, hi] exactly (:func:`_thin_curved`, E = 0)
-    for r in rows.tolist():
+    _projection_exact_curved(face_id, proj, points, triangles[rows], lo[rows], hi[rows], sense)
+
+
+def _projection_exact_plane(face_id, proj, points, rows, sense):
+    """(i) on a plane for the triangles ``rows`` the first float filter left undecided: the tight
+    filter of Q7 (:func:`_tight_dot`, the reference ``e1 x e2`` within :func:`_cross_error`; Codex
+    N3 r5 P1: the polygon400 slivers decide here), then exactly."""
+    rows = np.asarray(rows, dtype=np.int64).reshape(-1, 3)
+    value, error = _tight_dot(points, rows, np.asarray(proj.normal_f, dtype=float),
+                              _cross_error(proj._plane.e1, proj._plane.e2), sense)
+    if bool(np.any(value < -error)):
+        raise _invalid(face_id, _PROJECTED)
+    rows = rows[~(value > error)]
+    if not len(rows):
+        return
+    normals = _cached_normals(points, rows, getattr(proj, "normals", None))
+    reference = proj.normal
+    for n in normals:
+        if not sense * (n[0] * reference[0] + n[1] * reference[1] + n[2] * reference[2]) > 0:
+            raise _invalid(face_id, _PROJECTED)
+
+
+def _projection_exact_curved(face_id, proj, points, rows, lo, hi, sense):
+    """(i) on a cylinder or cone, exactly, for the triangles ``rows`` (P-azimuth ranges ``[lo,
+    hi]``) the float filter left undecided: the vertices' exact azimuths inside ``[lo, hi]`` (no
+    libm assumption), then the sign of ``n . (cos t f1 + sin t f2)`` over ``[lo, hi]`` exactly
+    (:func:`_thin_curved`, E = 0)."""
+    rows = np.asarray(rows, dtype=np.int64).reshape(-1, 3)
+    lo, hi = np.asarray(lo, dtype=float), np.asarray(hi, dtype=float)
+    for r in range(len(rows)):
         at_lo, at_hi = _cos_sin(float(lo[r])), _cos_sin(float(hi[r]))
         if at_lo is None or at_hi is None:
             raise _invalid(face_id, _PROJECTED)
-        for i in triangles[r].tolist():
+        for i in rows[r].tolist():
             x, y, _ = proj.exact(i)
             cl, ch, sl, sh = at_lo
             after_lo = (y * cl if y >= 0 else y * ch) - (x * sh if x >= 0 else x * sl)        # cross2(c(lo), v)
@@ -2199,8 +2331,8 @@ def _projection_triangles(face_id, proj, points, triangles, sense):
             before_hi = (x * sl if x >= 0 else x * sh) - (y * ch if y >= 0 else y * cl)       # cross2(v, c(hi))
             if not (after_lo > 0 and before_hi > 0):
                 raise _invalid(face_id, _PROJECTED)
-    zero, folded = _thin_curved(points, triangles[rows], lo[rows], hi[rows], None, None, None, 0.0, sense,
-                                frame=proj.frame)
+    zero, folded = _thin_curved(points, rows, lo, hi, None, None, None, 0.0, sense, frame=proj.frame,
+                                cache=getattr(proj, "normals", None))
     if bool(np.any(folded | zero)):
         raise _invalid(face_id, _PROJECTED)
 
@@ -2211,15 +2343,17 @@ def _box_pairs(lo_u, hi_u, lo_v, hi_v):
     order = np.argsort(lo_u, kind="stable")
     slo, shi = lo_u[order], hi_u[order]
     end = np.searchsorted(slo, shi, side="right")
-    counts = np.maximum(end - np.arange(m) - 1, 0)
+    position = np.arange(m)
+    counts = np.maximum(end - position - 1, 0)
     total = int(counts.sum())
     if total > _MAX_BOX_PAIRS:
         raise _slab._too_complex(f"{total} overlapping boundary edge boxes (more than {_MAX_BOX_PAIRS})")
-    first = np.repeat(np.arange(m), counts)
-    offset = np.arange(total) - np.repeat(np.cumsum(counts) - counts, counts)
-    i, j = order[first], order[first + 1 + offset]
-    keep = (lo_v[i] <= hi_v[j]) & (lo_v[j] <= hi_v[i])
-    return i[keep], j[keep]
+    # sorted positions: the first of each pair, and the second (r5 P1: the v test on sorted copies)
+    first = np.repeat(position, counts)
+    second = np.arange(total) - np.repeat(np.cumsum(counts) - counts - position - 1, counts)
+    vlo, vhi = lo_v[order], hi_v[order]
+    keep = (vlo[first] <= vhi[second]) & (vlo[second] <= vhi[first])
+    return order[first[keep]], order[second[keep]]
 
 
 def _check_boundary(face_id, proj, tails, heads):
@@ -2279,9 +2413,9 @@ def _check_boundary(face_id, proj, tails, heads):
     else:
         first, second = _box_pairs(lo_u, hi_u, lo_v, hi_v)
         keep = (following[first] != second) & (following[second] != first)
-        near = list(zip(first[keep].tolist(), second[keep].tolist()))
-    if near:
-        pair = np.array(near, dtype=np.int64)
+        near = np.column_stack((first[keep], second[keep]))
+    if len(near):
+        pair = np.asarray(near, dtype=np.int64)
         e_, f_ = pair[:, 0], pair[:, 1]
         near = pair[~proj.apart(tails[e_], heads[e_], tails[f_], heads[f_])].tolist()
     for e, f in near:
@@ -2337,13 +2471,374 @@ def _check_boundary(face_id, proj, tails, heads):
 def _check_projection(face_id, proj, points, triangles, sense, chain):
     """Codex N3 r4: the global injectivity certificate (module section above; docs "Global
     injectivity"): (i) on the published triangles, (ii)-(iii) on the boundary chain; on a curved
-    support also the whole mesh's P-azimuth range below 2 pi (P a single-valued function there)."""
+    support also the whole mesh's P-azimuth range below 2 pi (P a single-valued function there).
+    A small face (:data:`_SMALL_POINTS`) takes the scalar path, the same decisions (Codex N3 r5 P1)."""
+    if getattr(proj, "small", False):
+        _check_projection_small(face_id, proj, points, triangles, sense, chain)
+        return
     if proj.curved:
         lo, hi = float(np.min(proj.u - proj.aerr)), float(np.max(proj.u + proj.aerr))
         if not hi - lo < _TWO_PI * (1.0 - 4.0 * _EPS):
             raise _refuse("TRIM_WINDS_SUPPORT", face_id, _EXTENT)
     _projection_triangles(face_id, proj, points, triangles, sense)
     _check_boundary(face_id, proj, *chain)
+
+
+# ----------------------------------------------------------------------------- small faces (Codex N3 r5 P1)
+#
+# The round-4 certificate on NumPy arrays costs about 0.3 ms per face in call overhead (the 400-face
+# cylinder: +110 ms).  A face with at most _SMALL_POINTS mesh points takes a scalar path: the same
+# float quantities computed with Python floats (the same formulas and error bounds; math's cos, sin,
+# atan2 and hypot within the few ulps the bounds already assume), the same filters, the same exact
+# predicates (inherited from the array classes) and the same refusal texts in the same order of
+# checks.  Every filter only routes to an exact decision, so the accept / refuse decision is the
+# exact one on either path; no published value is computed here.
+
+#: the most mesh points of a face whose projection certificate takes the scalar path
+_SMALL_POINTS = 40
+
+
+def _projection(chart, points, theta, normals, face_id=None):
+    """The projection P of the lifted mesh for :func:`_check_projection`: the plane's (``theta``
+    None) or the curved supports', scalar for a small face; ``normals`` the exact normals Q7 has
+    already computed (shared, :func:`_cached_normals`)."""
+    small = len(points) <= _SMALL_POINTS
+    if theta is None:
+        proj = (_SmallPlaneProjection if small else _PlaneProjection)(chart, points)
+    else:
+        proj = (_SmallCurvedProjection if small else _CurvedProjection)(face_id, chart, points, theta)
+    proj.normals = normals
+    return proj
+
+
+def _scale_bits_py(*vectors):
+    """:func:`_scale_bits` on Python floats (the same ``k``)."""
+    low = None
+    for vector in vectors:
+        for x in vector:
+            if abs(x) > 0.0:
+                e = math.frexp(x)[1]
+                if low is None or e < low:
+                    low = e
+    return 0 if low is None else int(min(1074, max(0, 53 - low)))
+
+
+def _difference_py(p, q, rows):
+    """:func:`_differences` for one pair of points (tuples): ``M (p - q)`` and its bound."""
+    d0, d1, d2 = p[0] - q[0], p[1] - q[1], p[2] - q[2]
+    out = [d0 * r[0] + d1 * r[1] + d2 * r[2] for r in rows]
+    return out, 4.0 * _EPS * (abs(d0) + abs(d1) + abs(d2)) * (1.0 + 8.0 * _EPS) + _UNDERFLOW
+
+
+class _SmallPlaneProjection(_PlaneProjection):
+    """:class:`_PlaneProjection` on Python floats (a small face)."""
+    small = True
+
+    def __init__(self, plane, points):
+        o = [float(x) for x in plane.o]
+        e1, e2 = [float(x) for x in plane.e1], [float(x) for x in plane.e2]
+        self.pl = [tuple(p) for p in points.tolist()]
+        u, v, err = [], [], []
+        for x, y, z in self.pl:
+            d0, d1, d2 = x - o[0], y - o[1], z - o[2]
+            u.append(d0 * e1[0] + d1 * e1[1] + d2 * e1[2])
+            v.append(d0 * e2[0] + d1 * e2[1] + d2 * e2[2])
+            err.append(4.0 * _EPS * (abs(d0) + abs(d1) + abs(d2)) * (1.0 + 8.0 * _EPS) + _UNDERFLOW)
+        self.ul, self.vl, self.errl, self.eul = u, v, err, err
+        self.rows = (e1, e2)
+        self.points, self._plane = points, plane
+        self.normal_f = tuple(float(x) for x in _cross3(plane.e1, plane.e2))
+        self._o = None
+        self._cache = {}
+        self._args = (plane, points)
+
+    def _setup(self):
+        plane = self._plane
+        self._k = _scale_bits_py(*self.pl, [float(x) for x in plane.o])
+        k = _scale_bits_py([float(x) for x in plane.e1], [float(x) for x in plane.e2])
+        self._o, self._e1, self._e2 = _fixed(plane.o, self._k), _fixed(plane.e1, k), _fixed(plane.e2, k)
+
+    def exact(self, i):
+        hit = self._cache.get(i)
+        if hit is None:
+            if self._o is None:
+                self._setup()
+            d = [x - y for x, y in zip(_fixed(self.pl[i], self._k), self._o)]
+            hit = (sum(x * y for x, y in zip(d, self._e1)), sum(x * y for x, y in zip(d, self._e2)))
+            self._cache[i] = hit
+        return hit
+
+    def full(self):
+        proj = _PlaneProjection(*self._args)
+        proj.normals = self.normals
+        return proj
+
+    def adjacent_scalar(self, a, b, c):
+        """:meth:`_PlaneProjection.adjacent_decided` for one pair: ``(decided, turn, error)``."""
+        pb = self.pl[b]
+        (w0x, w0y), e0 = _difference_py(self.pl[a], pb, self.rows)
+        (w1x, w1y), e1 = _difference_py(self.pl[c], pb, self.rows)
+        nw0, nw1 = abs(w0x) + abs(w0y), abs(w1x) + abs(w1y)
+        orient = w0x * w1y - w0y * w1x
+        dot = w0x * w1x + w0y * w1y
+        bound = (nw0 * e1 + nw1 * e0 + 2.0 * e0 * e1 + 2.0 * _EPS * nw0 * nw1) * (1.0 + 64.0 * _EPS) + _UNDERFLOW
+        return abs(orient) > bound or dot < -bound, -orient, bound
+
+    def _side(self, base, tip, x, y):
+        """Both ``x`` and ``y`` certainly strictly on one side of the line ``base -> tip``."""
+        pb = self.pl[base]
+        (lx, ly), el = _difference_py(self.pl[tip], pb, self.rows)
+        nl = abs(lx) + abs(ly)
+        signs = []
+        for w in (x, y):
+            (wx, wy), e = _difference_py(self.pl[w], pb, self.rows)
+            nw = abs(wx) + abs(wy)
+            o = lx * wy - ly * wx
+            bound = (nl * e + nw * el + 2.0 * el * e + 2.0 * _EPS * nl * nw) * (1.0 + 64.0 * _EPS) + _UNDERFLOW
+            signs.append(1 if o > bound else (-1 if o < -bound else 0))
+        return signs[0] == signs[1] != 0
+
+    def _beyond(self, a, b, x, y):
+        """:func:`_beyond` for one pair."""
+        pb = self.pl[b]
+        (lx, ly), el = _difference_py(pb, self.pl[a], self.rows)
+        nl = abs(lx) + abs(ly)
+        for w in (x, y):
+            (wx, wy), e = _difference_py(self.pl[w], pb, self.rows)
+            nw = abs(wx) + abs(wy)
+            bound = (nl * e + nw * el + 2.0 * el * e + 2.0 * _EPS * nl * nw) * (1.0 + 64.0 * _EPS) + _UNDERFLOW
+            if not wx * lx + wy * ly > bound:
+                return False
+        return True
+
+    def apart_scalar(self, p, q, r, s):
+        """:meth:`_PlaneProjection.apart` for one pair of segments."""
+        return (self._side(p, q, r, s) or self._side(r, s, p, q) or self._beyond(p, q, r, s)
+                or self._beyond(q, p, r, s) or self._beyond(r, s, p, q) or self._beyond(s, r, p, q))
+
+
+class _SmallCurvedProjection(_CurvedProjection):
+    """:class:`_CurvedProjection` on Python floats (a small face)."""
+    small = True
+
+    def __init__(self, face_id, chart, points, theta):
+        o = [float(x) for x in chart.o]
+        e1, e2, a = ([float(x) for x in v] for v in (chart.e1, chart.e2, chart.a))
+        self.pl = [tuple(p) for p in points.tolist()]
+        xyz, err, rho = [], [], []
+        for x, y, z in self.pl:
+            d0, d1, d2 = x - o[0], y - o[1], z - o[2]
+            px = d0 * e1[0] + d1 * e1[1] + d2 * e1[2]
+            py = d0 * e2[0] + d1 * e2[1] + d2 * e2[2]
+            xyz.append((px, py, d0 * a[0] + d1 * a[1] + d2 * a[2]))
+            err.append(4.0 * _EPS * (abs(d0) + abs(d1) + abs(d2)) * (1.0 + 8.0 * _EPS) + _UNDERFLOW)
+            rho.append(math.hypot(px, py))
+        if not all(r > 16.0 * e for r, e in zip(rho, err)):
+            raise _invalid(face_id, _NEAR_AXIS)
+        u, aerr = [], []
+        for (px, py, _), t, e, r in zip(xyz, theta.tolist(), err, rho):
+            raw = math.atan2(py, px)
+            turns = round((t - raw) / _TWO_PI)
+            value = raw + turns * _TWO_PI
+            if not abs(value - t) <= 0.25 * math.pi:
+                raise _invalid(face_id, _NEAR_AXIS)
+            u.append(value)
+            aerr.append((2.2 * e / r + 8.0 * _EPS * (1.0 + abs(value)) + abs(turns) * (2.5e-16 + 8.0 * _EPS))
+                        * (1.0 + 8.0 * _EPS))
+        self.xyzl, self.ul, self.vl, self.errl, self.aerrl, self.eul = xyz, u, [p[2] for p in xyz], err, aerr, aerr
+        self.rows = (e1, e2, a)
+        self.points, self._chart = points, chart
+        self.f1 = tuple(float(x) for x in _cross3(chart.e2, chart.a))
+        self.f2 = tuple(float(x) for x in _cross3(chart.a, chart.e1))
+        self._m = None
+        self._cache = {}
+        self._args = (face_id, chart, points, theta)
+
+    def _setup(self):
+        chart = self._chart
+        self._k = _scale_bits_py(*self.pl, [float(x) for x in chart.o])
+        k = _scale_bits_py(*([float(x) for x in v] for v in (chart.e1, chart.e2, chart.a)))
+        self._o, self._m = _fixed(chart.o, self._k), [_fixed(chart.e1, k), _fixed(chart.e2, k), _fixed(chart.a, k)]
+
+    def exact(self, i):
+        hit = self._cache.get(i)
+        if hit is None:
+            if self._m is None:
+                self._setup()
+            d = [x - y for x, y in zip(_fixed(self.pl[i], self._k), self._o)]
+            hit = tuple(sum(x * y for x, y in zip(d, row)) for row in self._m)
+            self._cache[i] = hit
+        return hit
+
+    def full(self):
+        proj = _CurvedProjection(*self._args)
+        proj.normals = self.normals
+        return proj
+
+    def adjacent_scalar(self, a, b, c):
+        """:meth:`_CurvedProjection.adjacent_decided` for one pair: ``(decided, turn, error)``."""
+        bx, by, _ = self.xyzl[b]
+        pb = self.pl[b]
+        (w0x, w0y, z0), e0 = _difference_py(self.pl[a], pb, self.rows)
+        (w1x, w1y, z1), e1 = _difference_py(self.pl[c], pb, self.rows)
+        eb = self.errl[b]
+        nw0, nw1 = abs(w0x) + abs(w0y), abs(w1x) + abs(w1y)
+        nb = abs(bx) + abs(by)
+        cross0, cross1 = bx * w0y - by * w0x, bx * w1y - by * w1x
+        ecross0 = nb * e0 + nw0 * eb + 2.0 * eb * e0 + 2.0 * _EPS * nb * nw0
+        ecross1 = nb * e1 + nw1 * eb + 2.0 * eb * e1 + 2.0 * _EPS * nb * nw1
+        margin = 1.0 + 64.0 * _EPS
+        c0, c1 = ecross0 * margin + _UNDERFLOW, ecross1 * margin + _UNDERFLOW
+        q0, q1 = e0 * margin + _UNDERFLOW, e1 * margin + _UNDERFLOW
+        apart = ((cross0 > c0 and cross1 < -c1) or (cross0 < -c0 and cross1 > c1)
+                 or (z0 > q0 and z1 < -q1) or (z0 < -q0 and z1 > q1))
+        az0, az1, ac0, ac1 = abs(z0), abs(z1), abs(cross0), abs(cross1)
+        alpha = z0 * cross1 - z1 * cross0
+        ealpha = (az0 * ecross1 + ac1 * e0 + e0 * ecross1 + az1 * ecross0 + ac0 * e1 + e1 * ecross0
+                  + 2.0 * _EPS * (az0 * ac1 + az1 * ac0))
+        beta = w0x * w1y - w0y * w1x
+        ebeta = nw0 * e1 + nw1 * e0 + 2.0 * e0 * e1 + 2.0 * _EPS * nw0 * nw1
+        reach = min(az0 + e0, az1 + e1) * (abs(beta) + ebeta) * (1.0 + 4.0 * _EPS)
+        gap = abs(alpha) - reach
+        far = gap > (ealpha + _EPS * (abs(alpha) + reach)) * margin + _UNDERFLOW
+        return apart or far, alpha, ealpha * margin + _UNDERFLOW
+
+    def apart_scalar(self, p, q, r, s):
+        """No float filter for non-adjacent curve pairs (as :meth:`_CurvedProjection.apart`)."""
+        return False
+
+
+def _check_projection_small(face_id, proj, points, triangles, sense, chain):
+    """:func:`_check_projection` on a small face (the scalar path, the same decisions)."""
+    if proj.curved:
+        lo = min(x - e for x, e in zip(proj.ul, proj.aerrl))
+        hi = max(x + e for x, e in zip(proj.ul, proj.aerrl))
+        if not hi - lo < _TWO_PI * (1.0 - 4.0 * _EPS):
+            raise _refuse("TRIM_WINDS_SUPPORT", face_id, _EXTENT)
+    _projection_triangles_small(face_id, proj, points, triangles, sense)
+    _check_boundary_small(face_id, proj, *chain)
+
+
+def _projection_triangles_small(face_id, proj, points, triangles, sense):
+    """:func:`_projection_triangles` on Python floats."""
+    if not len(triangles):
+        return
+    pl, rows, lows, highs = proj.pl, [], [], []
+    curved = proj.curved
+    if curved:
+        u, aerr, (f10, f11, f12), (f20, f21, f22) = proj.ul, proj.aerrl, proj.f1, proj.f2
+    else:
+        n0, n1, n2 = proj.normal_f
+    for t in triangles.tolist():
+        i, j, l = t
+        ax, ay, az = pl[i]
+        bx, by, bz = pl[j]
+        cx, cy, cz = pl[l]
+        d1x, d1y, d1z, d2x, d2y, d2z = bx - ax, by - ay, bz - az, cx - ax, cy - ay, cz - az
+        nx, ny, nz = d1y * d2z - d1z * d2y, d1z * d2x - d1x * d2z, d1x * d2y - d1y * d2x
+        lengths = math.sqrt(d1x * d1x + d1y * d1y + d1z * d1z) * math.sqrt(d2x * d2x + d2y * d2y + d2z * d2z)
+        if not curved:
+            if not sense * (nx * n0 + ny * n1 + nz * n2) > 24.0 * _EPS * lengths + _UNDERFLOW:
+                rows.append(t)
+            continue
+        lo = math.nextafter(min(u[i] - aerr[i], u[j] - aerr[j], u[l] - aerr[l]), -math.inf)
+        hi = math.nextafter(max(u[i] + aerr[i], u[j] + aerr[j], u[l] + aerr[l]), math.inf)
+        if not hi - lo < math.pi:
+            raise _invalid(face_id, _PROJECTED)
+        p = sense * (nx * f10 + ny * f11 + nz * f12)
+        q = sense * (nx * f20 + ny * f21 + nz * f22)
+        bound = 40.0 * _EPS * lengths + _UNDERFLOW
+        if not (p * math.cos(lo) + q * math.sin(lo) > bound and p * math.cos(hi) + q * math.sin(hi) > bound):
+            rows.append(t)
+            lows.append(lo)
+            highs.append(hi)
+    if not rows:
+        return
+    rows = np.array(rows, dtype=np.int64)
+    if curved:
+        _projection_exact_curved(face_id, proj, points, rows, lows, highs, sense)
+    else:
+        _projection_exact_plane(face_id, proj, points, rows, sense)
+
+
+def _check_boundary_small(face_id, proj, tails, heads):
+    """:func:`_check_boundary` on Python floats (the same checks in the same order); a chain with
+    two tails of equal computed P (the bitwise identification) takes the array path."""
+    tails_list, heads_list = np.asarray(tails).tolist(), np.asarray(heads).tolist()
+    u, v, err, eu = proj.ul, proj.vl, proj.errl, proj.eul
+    seen = set()
+    for t in tails_list:
+        key = (u[t], v[t])
+        if key in seen:
+            _check_boundary(face_id, proj.full(), tails, heads)
+            return
+        seen.add(key)
+    tails, heads = tails_list, heads_list
+    m = len(tails)
+    if m < 3 or len(set(tails)) != m or sorted(tails) != sorted(heads):
+        raise _invalid(face_id, _NOT_SIMPLE)
+    position = {t: e for e, t in enumerate(tails)}
+    following = [position[h] for h in heads]
+    if proj.curved and not all(abs(u[t] - u[h]) + eu[t] + eu[h] < _EDGE_SPAN for t, h in zip(tails, heads)):
+        raise _invalid(face_id, _NOT_SIMPLE)
+    down, up = -math.inf, math.inf
+    lu = [math.nextafter(min(u[t] - eu[t], u[h] - eu[h]), down) for t, h in zip(tails, heads)]
+    hu = [math.nextafter(max(u[t] + eu[t], u[h] + eu[h]), up) for t, h in zip(tails, heads)]
+    lv = [math.nextafter(min(v[t] - err[t], v[h] - err[h]), down) for t, h in zip(tails, heads)]
+    hv = [math.nextafter(max(v[t] + err[t], v[h] + err[h]), up) for t, h in zip(tails, heads)]
+    turns, turn_errors, undecided = [], [], []
+    for e in range(m):
+        decided, turn, error = proj.adjacent_scalar(tails[e], heads[e], heads[following[e]])
+        turns.append(turn)
+        turn_errors.append(error)
+        if not decided:
+            undecided.append(e)
+    for e in undecided:
+        if proj.adjacent_meet(tails[e], heads[e], heads[following[e]]):
+            raise _invalid(face_id, _NOT_SIMPLE)
+    near = [(e, f) for e in range(m) for f in range(e + 1, m)
+            if lu[f] <= hu[e] and lu[e] <= hu[f] and lv[f] <= hv[e] and lv[e] <= hv[f]
+            and following[e] != f and following[f] != e]
+    for e, f in near:
+        if proj.apart_scalar(tails[e], heads[e], tails[f], heads[f]):
+            continue
+        if proj.meet(tails[e], heads[e], tails[f], heads[f]):
+            raise _invalid(face_id, _NOT_SIMPLE)
+    label = [-1] * m
+    for start in range(m):
+        if label[start] < 0:
+            e = start
+            while label[e] < 0:
+                label[e] = start
+                e = following[e]
+    previous = [0] * m
+    for e, f in enumerate(following):
+        previous[f] = e
+    positive = []
+    loops = [0] if all(x == 0 for x in label) else sorted(set(label))
+    for loop in loops:
+        edges = [e for e in range(m) if label[e] == loop]
+        smallest = min(u[tails[e]] + eu[tails[e]] for e in edges)
+        candidates = [e for e in edges if u[tails[e]] - eu[tails[e]] <= smallest]
+        best = candidates[0]
+        for e in candidates[1:]:
+            if proj.smaller(tails[e], tails[best]):
+                best = e
+        pair = previous[best]
+        if turns[pair] > turn_errors[pair]:
+            turn = 1
+        elif turns[pair] < -turn_errors[pair]:
+            turn = -1
+        else:
+            turn = proj.turn(tails[pair], tails[best], heads[best])
+        if turn == 0:
+            raise _invalid(face_id, _NESTING)
+        if turn > 0:
+            positive.append(edges)
+    if len(positive) != 1:
+        raise _invalid(face_id, _NESTING)
+    if 0 in tails and 0 not in [tails[e] for e in positive[0]]:
+        raise _invalid(face_id, _NESTING)
 
 
 # ----------------------------------------------------------------------------- entry
