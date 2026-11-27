@@ -40,6 +40,7 @@ def _archive(tmp_path: Path, members: dict[str, bytes]) -> Path:
 
 @pytest.mark.parametrize("text", [
     "C:" + "/Github/ANYgeometry",
+    "/home/runner@corp/private",      # Codex r5 Low: "@" is no username boundary
     "E:" + "\\ANYworkspaceWork\\x",
     "D:" + "\\Users\\someone\\notes",
     "\\\\" + "fileserver\\share\\notes.md",
@@ -68,6 +69,9 @@ def test_scanner_flags_internal_markers(text: str) -> None:
     "see docs/home/users.md",
     "https://example.com/home/x",
     "HOME:/home/runner",
+    "/home/runner and /tmp are CI paths",
+    "Use /home/runner and/or /tmp.",
+    "Give /home/runner read/write access.",
     "file:///home/runner",
 ])
 def test_scanner_leaves_public_and_ci_paths(text: str) -> None:

@@ -24,6 +24,10 @@ backslash-escaped literal such as ``"\\\\alpha\\n"`` in a document is read as a
 UNC path (a false positive that blocks the release until the text changes).
 Also (Codex round 4 Low): a URL with a doubled slash before ``home`` or
 ``Users`` (``https://example.com//home/x``) is read as a home path.
+The CI runner exception (Codex round 5 Low) does not end at ``@``, so
+``/home/runner@corp/x`` is flagged; known limit: a directory name that starts
+with ``runner`` and a space (``/Users/runner backup/x``) still passes, because
+flagging it would also flag prose such as ``/home/runner and/or /tmp``.
 """
 
 from __future__ import annotations
@@ -43,7 +47,7 @@ _ANY_CASE = re.compile(
     re.IGNORECASE,
 )
 # POSIX home directories are case-sensitive; ``/users/`` inside a URL is not one.
-_EXACT_CASE = re.compile(r"(?<![\w.])/(?:home|Users)/(?!runner(?![\w.-]))[\w.-]+")
+_EXACT_CASE = re.compile(r"(?<![\w.])/(?:home|Users)/(?!runner(?![\w.@-]))[\w.-]+")
 
 
 class _Pattern:
