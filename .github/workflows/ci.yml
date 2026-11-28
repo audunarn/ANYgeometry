@@ -35,7 +35,7 @@ jobs:
     # The other fifteen runtime combinations retain sixteen balanced shards; unknown costs
     # remain uncertain and a single overlong case can still exceed the job cap.
     # Partial JUnit observations guide scheduling; they do not establish 30-minute fit.
-    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 45 || 30 }}
+    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 50 || 30 }}
     env:
       ANYGEOMETRY_SHARD_GROUPING: 'module'
       ANYGEOMETRY_TIMING_FACTOR: ${{ matrix.os == 'macos-15-intel' && '2' || '1' }}

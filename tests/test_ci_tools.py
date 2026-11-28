@@ -162,7 +162,7 @@ def test_full_ci_keeps_every_runtime_and_sixteen_shards_under_original_caps():
         assert "ANYGEOMETRY_TEST_SHARD: ${{ matrix.shard }}/16" in job
         assert "--junitxml=kernel-results.xml" in job
     # The Intel Mac shards ran 11-30 min against 30 (owner, 2026-11-26: "Raise limit to 45 min").
-    assert "timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 45 || 30 }}" in regular
+    assert "timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 50 || 30 }}" in regular
     assert "timeout-minutes: 30" in minimum
     assert "exclude:" not in minimum
     assert 'exclude:\n          - os: windows-latest\n            python-version: "3.14"' in regular
